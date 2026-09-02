@@ -1,0 +1,16 @@
+# YOLO cloud-chamber particle-track detector
+# Tested with the conda `rocm_env` (Python 3.12), torch 2.9.1+rocm7.2.1.
+#
+# GPU (AMD / ROCm) install is environment-specific and NOT pinned here.
+# The rocm_env already ships a ROCm build of torch; do not `pip install torch`
+# over it or you may replace it with a CPU/CUDA build.
+#
+# For a fresh CPU-only setup:
+#   pip install ultralytics opencv-python pyyaml
+# For NVIDIA CUDA, follow https://pytorch.org to get the matching torch wheel
+# first, then `pip install ultralytics`.
+
+ultralytics>=8.3.0
+opencv-python
+numpy
+pyyaml

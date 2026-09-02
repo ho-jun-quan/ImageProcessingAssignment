@@ -1,0 +1,10 @@
+path: c:/Users/PC/Desktop/RSW Coursework/Y3S1/Image Processing/Jun/YOLO/dataset
+train: images/train
+val: images/val
+nc: 5
+names:
+- Alpha
+- Proton
+- Electron_Positron_Muon
+- Low_Energy_Electron
+- Knock_On_Electron
