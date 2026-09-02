@@ -6,7 +6,7 @@ labelled dataset (~32 images, ~7 boxes per class, and most tracks per frame are
 left unlabelled). This helper samples frames from the videos in ../Videos so
 you can annotate more of them (label EVERY visible track in each frame).
 
-The extracted frames are CLAHE-enhanced with the same pipeline used everywhere
+The extracted frames use the same morphology-based pipeline used everywhere
 else, so what you annotate matches what the model trains and predicts on.
 
 Usage:
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract frames for annotation.")
     parser.add_argument("--video", default=None, help="Single video path (default: all in ../Videos)")
     parser.add_argument("--every", type=int, default=30, help="Sample one frame every N frames")
-    parser.add_argument("--no-enhance", action="store_true", help="Skip CLAHE enhancement")
+    parser.add_argument("--no-enhance", action="store_true", help="Skip morphology enhancement")
     parser.add_argument("--out", default=FRAMES_OUT_DIR, help="Output directory")
     args = parser.parse_args()
 

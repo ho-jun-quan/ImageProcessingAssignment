@@ -52,7 +52,19 @@ VIDEOS_DIR = os.path.join(JUN_DIR, "Videos")
 
 # Where the auto-generated YOLO dataset (images/labels + data.yaml) is written
 DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+VIDEO_DATASET_DIR = os.path.join(DATASET_DIR, "video_annotations_dataset")
+VIDEO_DATA_YAML = os.path.join(VIDEO_DATASET_DIR, "data.yaml")
 DATA_YAML = os.path.join(DATASET_DIR, "data.yaml")
+
+
+def resolve_training_data_yaml():
+    """Prefer the video-derived dataset when it exists; otherwise fall back to the legacy red-box dataset."""
+    if os.path.isfile(VIDEO_DATA_YAML):
+        return VIDEO_DATA_YAML
+    return DATA_YAML
+
+
+DATA_YAML = resolve_training_data_yaml()
 
 # Training run outputs
 RUNS_DIR = os.path.join(BASE_DIR, "runs")
@@ -62,8 +74,17 @@ RUN_NAME = "yolo11n_tracks"
 # Convenience path to the best trained weights (populated after training)
 BEST_WEIGHTS = os.path.join(RUNS_DIR, PROJECT_NAME, RUN_NAME, "weights", "best.pt")
 
+# CVAT XML annotations for the video in ../Videos
+VIDEO_ANNOTATIONS_XML = os.path.join(VIDEOS_DIR, "annotations.xml")
+VIDEO_SOURCE = os.path.join(VIDEOS_DIR, "VID_20221231_002624.mp4")
+
+# Default image input/output for inference
+IMAGE_INPUT_DIR = IMAGES_DIR
+IMAGE_OUTPUT_DIR = os.path.join(BASE_DIR, "output_images")
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
+
 # Default video I/O for inference
-VIDEO_INPUT = os.path.join(VIDEOS_DIR, "test_vid_cropped.mp4")
+VIDEO_INPUT = VIDEO_SOURCE
 VIDEO_OUTPUT = os.path.join(BASE_DIR, "output_yolo.mp4")
 
 # =============================================================================
@@ -86,13 +107,14 @@ BOX_INSET = 6
 # =============================================================================
 # Frame Pre-processing  (shared by dataset build AND inference)
 # =============================================================================
-# Cloud-chamber tracks are faint, low-contrast wisps. CLAHE (Contrast Limited
-# Adaptive Histogram Equalisation) on the luminance channel makes them pop.
-# The SAME enhancement must be applied to the training images and to the
-# inference frames, otherwise the model sees a different domain at test time.
-USE_CLAHE = True
-CLAHE_CLIP_LIMIT = 3.0
-CLAHE_TILE_GRID = (8, 8)
+# Morphology-based enhancement improves visibility of bright particle tracks
+# on a dark background without adaptive histogram equalisation.
+USE_DENOISING = True
+
+# Morphology settings for bright particle tracks on a dark background.
+MORPH_BACKGROUND_KERNEL = (15, 15)
+MORPH_CLEAN_KERNEL = (3, 3)
+MORPH_MIN_COMPONENT_AREA = 6
 
 # =============================================================================
 # Dataset Split
@@ -143,6 +165,15 @@ DUPLICATE_IOU_THRESHOLD = 0.70  # suppress near-identical boxes across classes
 # Boxes are matched to this list AFTER sorting detected boxes by area
 # (largest first) — identical ordering convention to the RandomForest project.
 #
+# Map CVAT label names from the video annotation XML to the YOLO class ids.
+CVAT_LABEL_MAP = {
+    "Alpha Particle": 0,
+    "Proton Particle": 1,
+    "Electron Particle": 2,
+    "Low Energy Electron": 3,
+    "Electron Kicking Out Secondary Electron": 4,
+}
+
 # 0=Alpha, 1=Proton, 2=Electron/Positron/Muon,
 # 3=Low-Energy Electron, 4=Knock-On Electron
 IMAGE_LABEL_MAP = {

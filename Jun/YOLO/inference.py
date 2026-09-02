@@ -4,19 +4,24 @@ inference.py — Run a trained YOLO particle-track detector on images and video.
 Provides:
   * load_model()            — load trained weights (falls back to base model)
   * detect_image()          — detect + annotate a single image (returns array)
+  * process_image()         — detect + write a single annotated image
+  * process_images()        — detect + write all images in a folder
   * process_video()         — detect frame-by-frame, write an annotated video
 
 Recall-oriented tricks (all toggled in config) help catch the faint tracks that
 whole-frame, high-confidence inference misses:
-  * CLAHE enhancement (identical to the dataset-build step)
+    * morphology-based binary enhancement (identical to the dataset-build step)
+    * median denoising, top-hat background subtraction, opening, and closing
   * test-time augmentation (multi-scale + flips)
   * tiled / SAHI-style inference with class-wise NMS merging
   * a low default confidence threshold
 
-Run directly to process the default video in config:
-    python inference.py
+Run directly to process an image folder or the default video in config:
+    python inference.py --images-dir ../Images
+    python inference.py --video ../Videos/test_vid_cropped.mp4
 """
 
+import argparse
 import os
 
 import cv2
@@ -58,11 +63,45 @@ def _draw_detections(frame, boxes_xyxy, class_ids, confs):
     return out
 
 
+def _show_stage_images(original, processed, annotated, annotated_unprocessed, delay_ms=800):
+    """Display the original, preprocessed, annotated, and unprocessed-annotated images."""
+    stages = {
+        "Original": original,
+        "Processed": processed,
+        "Annotated": annotated,
+        "Annotated (unprocessed)": annotated_unprocessed,
+    }
+    try:
+        for title, image in stages.items():
+            cv2.imshow(title, image)
+        cv2.waitKey(delay_ms)
+        for title in stages:
+            cv2.destroyWindow(title)
+    except cv2.error:
+        pass
+
+
+def _list_image_files(input_path):
+    """Return a list of supported image paths from a file or directory."""
+    if input_path is None:
+        return []
+    if os.path.isfile(input_path):
+        return [input_path]
+    if os.path.isdir(input_path):
+        files = []
+        for filename in sorted(os.listdir(input_path)):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in config.IMAGE_EXTENSIONS:
+                files.append(os.path.join(input_path, filename))
+        return files
+    return []
+
+
 def detect_image(model, image, conf=None, iou=None, use_tiling=None, use_tta=None):
     """
     Run detection on a single BGR image (path or array).
 
-    Applies the shared CLAHE enhancement first, then either whole-frame or
+    Applies the shared morphology-based enhancement first, then either whole-frame or
     tiled inference (config.USE_TILING). Returns (annotated_image, detections)
     where detections is a list of dicts:
     {class_id, class_name, confidence, bbox=(x1,y1,x2,y2)}.
@@ -102,6 +141,108 @@ def detect_image(model, image, conf=None, iou=None, use_tiling=None, use_tta=Non
     # Draw on the ENHANCED frame so the overlay matches what the model saw.
     annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs)
     return annotated, detections
+
+
+def process_image(model, input_path, output_path=None, conf=None,
+                  iou=None, use_tiling=None, use_tta=None, display=True):
+    """Load a single image, detect particles, and write annotated results into stage folders."""
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"Image not found: {input_path}")
+
+    image = cv2.imread(input_path)
+    if image is None:
+        raise ValueError(f"Could not read image: {input_path}")
+
+    enhanced = preprocessing.enhance_frame(image)
+    if use_tiling is None:
+        use_tiling = config.USE_TILING
+    if use_tta is None:
+        use_tta = config.USE_TTA
+
+    if use_tiling:
+        boxes_xyxy, class_ids, confs = _detect_tiled(
+            model, enhanced, conf if conf is not None else config.CONF_THRESHOLD,
+            iou if iou is not None else config.IOU_THRESHOLD,
+            use_tta,
+        )
+    else:
+        boxes_xyxy, class_ids, confs = _predict(
+            model, enhanced,
+            conf if conf is not None else config.CONF_THRESHOLD,
+            iou if iou is not None else config.IOU_THRESHOLD,
+            use_tta,
+        )
+
+    detections = []
+    for xyxy, cls_id, c in zip(boxes_xyxy, class_ids, confs):
+        cls_id = int(cls_id)
+        detections.append({
+            "class_id": cls_id,
+            "class_name": config.CLASS_NAMES[cls_id] if cls_id < config.NUM_CLASSES else str(cls_id),
+            "confidence": float(c),
+            "bbox": tuple(int(v) for v in xyxy),
+        })
+
+    annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs)
+    annotated_unprocessed = _draw_detections(image, boxes_xyxy, class_ids, confs)
+
+    if output_path is None:
+        output_dir = config.IMAGE_OUTPUT_DIR
+    else:
+        output_dir = os.path.dirname(output_path) or config.IMAGE_OUTPUT_DIR
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    original_path = os.path.join(output_dir, f"{base_name}_original.png")
+    processed_path = os.path.join(output_dir, f"{base_name}_processed.png")
+    annotated_path = os.path.join(output_dir, f"{base_name}_annotated.png")
+    annotated_unprocessed_path = os.path.join(output_dir, f"{base_name}_annotated_unprocessed.png")
+
+    cv2.imwrite(original_path, image)
+    cv2.imwrite(processed_path, enhanced)
+    cv2.imwrite(annotated_path, annotated)
+    cv2.imwrite(annotated_unprocessed_path, annotated_unprocessed)
+
+    if display:
+        _show_stage_images(image, enhanced, annotated, annotated_unprocessed)
+
+    return {
+        "input_path": input_path,
+        "output_dir": output_dir,
+        "original_path": original_path,
+        "processed_path": processed_path,
+        "annotated_path": annotated_path,
+        "annotated_unprocessed_path": annotated_unprocessed_path,
+        "detections": detections,
+        "count": len(detections),
+    }
+
+
+def process_images(model, input_dir=None, output_dir=None, conf=None,
+                  iou=None, use_tiling=None, use_tta=None, display=True):
+    """Process every supported image in a directory and save annotated results."""
+    input_dir = input_dir or config.IMAGE_INPUT_DIR
+    output_dir = output_dir or config.IMAGE_OUTPUT_DIR
+    os.makedirs(output_dir, exist_ok=True)
+
+    files = _list_image_files(input_dir)
+    if not files:
+        print(f"No image files found in: {input_dir}")
+        return []
+
+    results = []
+    for image_path in files:
+        base_name = os.path.splitext(os.path.basename(image_path))[0]
+        result = process_image(
+            model, image_path, output_path=os.path.join(output_dir, f"{base_name}_annotated.png"),
+            conf=conf, iou=iou,
+            use_tiling=use_tiling, use_tta=use_tta, display=display,
+        )
+        results.append(result)
+        print(f"Processed {image_path} -> {result['output_dir']} ({result['count']} detections)")
+
+    return results
 
 
 def _predict(model, image, conf, iou, use_tta):
@@ -293,5 +434,19 @@ def process_video(model, input_path=None, output_path=None, conf=None,
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run YOLO detection on images or videos.")
+    parser.add_argument("--image", type=str, default=None, help="Single input image path")
+    parser.add_argument("--images-dir", type=str, default=None, help="Directory of input images")
+    parser.add_argument("--video", type=str, default=None, help="Single input video path")
+    parser.add_argument("--output", type=str, default=None, help="Output path for a single image/video")
+    args = parser.parse_args()
+
     model = load_model()
-    process_video(model)
+
+    if args.image:
+        process_image(model, args.image, output_path=args.output)
+    elif args.images_dir:
+        process_images(model, input_dir=args.images_dir, output_dir=args.output)
+    else:
+        process_video(model, input_path=args.video or config.VIDEO_INPUT,
+                      output_path=args.output or config.VIDEO_OUTPUT)

@@ -33,13 +33,17 @@ def train(model_name=None, epochs=None, imgsz=None, batch=None, device=None):
     batch = batch if batch is not None else config.BATCH
     device = device if device is not None else config.DEVICE
 
-    if not os.path.isfile(config.DATA_YAML):
+    data_yaml = config.resolve_training_data_yaml()
+    if not os.path.isfile(data_yaml):
         raise FileNotFoundError(
-            f"{config.DATA_YAML} not found. Run prepare_dataset.py first."
+            f"No YOLO dataset found. Expected either {config.VIDEO_DATA_YAML} or {config.DATA_YAML}. "
+            "Run the video-derived preparation script or prepare_dataset.py first."
         )
 
+    print(f"Training on dataset: {data_yaml}")
+
     try:
-        return _run_training(model_name, epochs, imgsz, batch, device)
+        return _run_training(model_name, epochs, imgsz, batch, device, data_yaml)
     except Exception as exc:  # noqa: BLE001
         if device != "cpu" and _is_gpu_kernel_error(exc):
             print(
@@ -47,7 +51,7 @@ def train(model_name=None, epochs=None, imgsz=None, batch=None, device=None):
                 f"       {type(exc).__name__}: {exc}\n"
                 "[warn] Retrying on CPU (device='cpu')...\n"
             )
-            return _run_training(model_name, epochs, imgsz, batch, "cpu")
+            return _run_training(model_name, epochs, imgsz, batch, "cpu", data_yaml)
         raise
 
 
@@ -61,14 +65,14 @@ def _is_gpu_kernel_error(exc):
     return any(n in msg for n in needles)
 
 
-def _run_training(model_name, epochs, imgsz, batch, device):
+def _run_training(model_name, epochs, imgsz, batch, device, data_yaml):
     """Fit a fresh YOLO model on the given device and export best weights."""
     # On CPU, mixed precision and multi-worker mosaic hurt more than help.
     on_cpu = str(device) == "cpu"
     model = YOLO(model_name)
 
     results = model.train(
-        data=config.DATA_YAML,
+        data=data_yaml,
         epochs=epochs,
         imgsz=imgsz,
         batch=batch,

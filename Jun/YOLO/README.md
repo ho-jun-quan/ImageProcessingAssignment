@@ -33,10 +33,10 @@ each labelled track. `prepare_dataset.py`:
 | file | purpose |
 |------|---------|
 | `config.py` | classes, paths, red-box params, hyper-parameters, label map |
-| `preprocessing.py` | shared CLAHE frame enhancement (dataset build + inference) |
+| `preprocessing.py` | shared morphology-based frame enhancement (dataset build + inference) |
 | `prepare_dataset.py` | red-box images → YOLO dataset (inpaint + enhance) |
 | `train.py` | fine-tune YOLO11n on the dataset |
-| `inference.py` | detect on images / annotate a video (CLAHE + TTA + tiling) |
+| `inference.py` | detect on images / annotate a video (morphology + TTA + tiling) |
 | `extract_frames.py` | sample frames from the videos to expand the dataset |
 | `cloud_chamber_yolo.ipynb` | end-to-end notebook (prep → train → infer → improve) |
 | `requirements.txt` | Python dependencies |
@@ -79,9 +79,9 @@ video. Two kinds of fix are provided:
 
 **Inference-time (no retraining, all toggled in `config.py`):**
 
-- **CLAHE enhancement** (`preprocessing.py`, `USE_CLAHE`) — applied identically
-  to the training images and the inference frames so faint tracks pop and the
-  train/test domains match.
+- **Morphology enhancement** (`preprocessing.py`) — median denoising, white
+  top-hat background subtraction, thresholding, opening, closing, and connected
+  component filtering are applied identically to training and inference frames.
 - **Low confidence** (`CONF_THRESHOLD = 0.10`) — favours recall.
 - **Test-time augmentation** (`USE_TTA`) — multi-scale + flips.
 - **Tiled / SAHI-style inference** (`USE_TILING`, `TILE_ROWS/COLS/OVERLAP`) —
@@ -94,9 +94,8 @@ The dataset is tiny (~32 images, ~7 boxes/class) and, crucially, most visible
 tracks in each frame are *not* labelled — so the model is taught to treat faint
 tracks as background. Use `extract_frames.py` to sample more frames, label
 **every** visible track, then rebuild (`prepare_dataset.py`) and retrain. Because
-enhancement is now baked into the dataset build, retraining also removes the
-CLAHE train/inference mismatch that can cause spurious boxes when enhancing at
-inference against the old (non-enhanced) weights.
+the morphology enhancement is baked into the dataset build, retraining keeps the
+same preprocessing between training and inference.
 
 `config.py` training defaults were also raised for the retrain
 (`EPOCHS = 300`, `PATIENCE = 100`).
