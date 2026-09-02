@@ -1,0 +1,18 @@
+# Dataset (too large for GitHub)
+Raw_Dataset/
+
+# Temporary processing files
+uploads/
+results/
+result_binary.jpg
+result_classified.jpg
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Diagnostic outputs
+diag_*.jpg
