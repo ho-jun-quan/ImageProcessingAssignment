@@ -1,0 +1,12 @@
+# Ignore common video file types
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.webm
+*.flv
+
+# Ignore video folders
+**/Videos/
+**/videos/
