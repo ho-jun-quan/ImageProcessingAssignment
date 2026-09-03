@@ -58,7 +58,7 @@ def apply_denoise(image):
     if image is None or image.size == 0:
         return image
     gray = _to_grayscale(image)
-    denoised = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=7, searchWindowSize=21)
+    denoised = cv2.fastNlMeansDenoising(gray, None, h=20, templateWindowSize=7, searchWindowSize=21)
     return cv2.cvtColor(denoised, cv2.COLOR_GRAY2BGR)
 
 

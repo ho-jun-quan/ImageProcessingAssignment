@@ -413,16 +413,19 @@ def _suppress_cross_class_duplicates(boxes, class_ids, confs):
 
 def process_video(model, input_path=None, output_path=None, conf=None,
                   iou=None, max_frames=None, progress_every=100,
-                  use_tiling=None, use_tta=None):
+                  use_tiling=None, use_tta=None, frames_output_dir=None):
     """
     Detect particle tracks in every frame of a video and write an annotated
-    output video. Returns a stats dict (frame/detection counts per class).
+    output video and optionally save each annotated frame as a PNG. Returns a
+    stats dict (frame/detection counts per class).
 
     Tiling + TTA greatly improve recall but are slow per frame (especially on
     CPU); pass use_tiling=False / use_tta=False for a fast preview.
     """
     input_path = input_path or config.VIDEO_INPUT
     output_path = output_path or config.VIDEO_OUTPUT
+    if frames_output_dir:
+        os.makedirs(frames_output_dir, exist_ok=True)
     conf = conf if conf is not None else config.CONF_THRESHOLD
     iou = iou if iou is not None else config.IOU_THRESHOLD
 
@@ -465,6 +468,11 @@ def process_video(model, input_path=None, output_path=None, conf=None,
             total_dets += 1
 
         writer.write(annotated)
+        if frames_output_dir:
+            frame_path = os.path.join(
+                frames_output_dir, f"frame_{frame_idx:06d}.png"
+            )
+            cv2.imwrite(frame_path, annotated)
 
         if progress_every and frame_idx % progress_every == 0:
             pct = 100.0 * frame_idx / total if total else 0.0
@@ -491,6 +499,7 @@ def process_video(model, input_path=None, output_path=None, conf=None,
         "total_detections": total_dets,
         "class_counts": class_counts,
         "output_path": output_path,
+        "frames_output_dir": frames_output_dir,
     }
 
 
@@ -500,14 +509,22 @@ if __name__ == "__main__":
     parser.add_argument("--images-dir", type=str, default=None, help="Directory of input images")
     parser.add_argument("--video", type=str, default=None, help="Single input video path")
     parser.add_argument("--output", type=str, default=None, help="Output path for a single image/video")
+    parser.add_argument("--conf", type=float, default=None,
+                        help="Minimum detection confidence from 0 to 1")
+    parser.add_argument("--frames-dir", type=str, default=None,
+                        help="Directory for individual annotated video frames")
     args = parser.parse_args()
+
+    if args.conf is not None and not 0.0 <= args.conf <= 1.0:
+        parser.error("--conf must be between 0 and 1")
 
     model = load_model()
 
     if args.image:
-        process_image(model, args.image, output_path=args.output)
+        process_image(model, args.image, output_path=args.output, conf=args.conf)
     elif args.images_dir:
-        process_images(model, input_dir=args.images_dir, output_dir=args.output)
+        process_images(model, input_dir=args.images_dir, output_dir=args.output, conf=args.conf)
     else:
         process_video(model, input_path=args.video or config.VIDEO_INPUT,
-                      output_path=args.output or config.VIDEO_OUTPUT)
+                      output_path=args.output or config.VIDEO_OUTPUT,
+                      conf=args.conf, frames_output_dir=args.frames_dir)
