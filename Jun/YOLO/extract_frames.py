@@ -6,7 +6,7 @@ labelled dataset (~32 images, ~7 boxes per class, and most tracks per frame are
 left unlabelled). This helper samples frames from the videos in ../Videos so
 you can annotate more of them (label EVERY visible track in each frame).
 
-The extracted frames use the same morphology-based pipeline used everywhere
+The extracted frames use the same denoising, DoG high-pass, and Otsu pipeline used everywhere
 else, so what you annotate matches what the model trains and predicts on.
 
 Usage:
@@ -55,7 +55,7 @@ def extract_from_video(video_path, every=30, enhance=True, out_dir=FRAMES_OUT_DI
             break
         if idx % every == 0:
             if enhance:
-                frame = preprocessing.enhance_frame(frame)
+                frame = preprocessing.preprocess_for_yolo(frame)
             out_path = os.path.join(out_dir, f"{stem}_f{idx:06d}.jpg")
             cv2.imwrite(out_path, frame)
             saved += 1
