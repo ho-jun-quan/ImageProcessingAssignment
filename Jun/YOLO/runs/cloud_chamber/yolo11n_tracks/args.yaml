@@ -1,7 +1,7 @@
 task: detect
 mode: train
 model: yolo11n.pt
-data: c:\Users\PC\Desktop\RSW Coursework\Y3S1\Image Processing\Jun\YOLO\dataset\data.yaml
+data: c:\Users\PC\Desktop\RSW Coursework\Y3S1\Image Processing\Jun\YOLO\dataset\video_annotations_dataset\data.yaml
 epochs: 300
 time: null
 patience: 100
