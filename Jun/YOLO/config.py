@@ -86,6 +86,7 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 # Default video I/O for inference
 VIDEO_INPUT = VIDEO_SOURCE
 VIDEO_OUTPUT = os.path.join(BASE_DIR, "output_yolo.mp4")
+VIDEO_FRAMES_OUTPUT_DIR = os.path.join(BASE_DIR, "output_video_frames")
 
 # =============================================================================
 # Cloud-Chamber Spatial Calibration
@@ -152,7 +153,7 @@ SEED = 42
 # =============================================================================
 # Low confidence favours recall (catching faint tracks). Detections can be
 # filtered higher afterwards; missed tracks can never be recovered.
-CONF_THRESHOLD = 0.10
+CONF_THRESHOLD = 0.60
 IOU_THRESHOLD = 0.45
 VIDEO_CODEC = "mp4v"
 
