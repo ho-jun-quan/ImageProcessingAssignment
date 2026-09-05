@@ -29,6 +29,7 @@ import math
 import csv
 import glob
 import argparse
+import importlib
 from pathlib import Path
 from typing import Tuple, List, Dict, Any, Optional
 
@@ -160,8 +161,10 @@ def get_yolo_detector():
     global _CACHED_YOLO_MODEL
     if _CACHED_YOLO_MODEL is None:
         try:
-            import inference
-            import config as yolo_config
+            # The detector is optional and lives in Jun/YOLO rather than being
+            # an installed top-level package. Load it only when it is needed.
+            inference = importlib.import_module("inference")
+            yolo_config = importlib.import_module("config")
             _CACHED_YOLO_MODEL = (inference, inference.load_model(yolo_config.BEST_WEIGHTS))
         except Exception as err:
             print(f"Warning: YOLO detector could not be loaded: {err}")
