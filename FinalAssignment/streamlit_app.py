@@ -43,7 +43,8 @@ ROOT = Path(__file__).resolve().parents[1]
 IVAN_DIR = ROOT / "Ivan"
 JUN_YOLO_DIR = ROOT / "Jun" / "YOLO"
 WEIQUAN_DIR = ROOT / "WeiQuan" / "code"
-TV_PATH = ROOT / "TV" / "current"
+TV_NEW_FILE = ROOT / "TV" / "new (use this ivan)"
+TV_PATH = TV_NEW_FILE if TV_NEW_FILE.exists() else (ROOT / "TV" / "current")
 COMBINED_PATH = ROOT / "FinalAssignment" / "combined_pipeline.py"
 
 for p in (IVAN_DIR, JUN_YOLO_DIR, WEIQUAN_DIR, ROOT / "FinalAssignment"):
@@ -236,14 +237,36 @@ def mask_to_rgb(mask: np.ndarray) -> np.ndarray:
     return mask
 
 
+def format_stage_image_for_display(img: np.ndarray) -> np.ndarray:
+    """Format single/multi-channel intermediate stage image for safe Streamlit rendering."""
+    if img is None:
+        return np.zeros((100, 100, 3), dtype=np.uint8)
+    if img.ndim == 2:
+        if img.dtype in (np.float32, np.float64):
+            if img.max() <= 1.0:
+                return (img * 255.0).clip(0, 255).astype(np.uint8)
+            return img.clip(0, 255).astype(np.uint8)
+        return img
+    elif img.ndim == 3:
+        if img.shape[2] == 1:
+            return img[:, :, 0]
+        return bgr_to_rgb(img)
+    return img
+
+
 # -----------------------------------------------------------------------------
 # Pipeline Execution Wrappers
 # -----------------------------------------------------------------------------
 def run_ivan(image_bgr: np.ndarray, pixels_per_mm: float = 12.5) -> Dict[str, Any]:
     """Ivan's pipeline: Otsu binarisation, reflection suppression, and bbox geometry."""
     web_app = load_module_by_path("ivan_web_app", IVAN_DIR / "web_app.py")
-    annotated, mask, detections = web_app.process_frame(image_bgr)
-    
+    res = web_app.process_frame(image_bgr, collect_stages=True)
+    if len(res) == 4:
+        annotated, mask, detections, raw_stages = res
+    else:
+        annotated, mask, detections = res
+        raw_stages = {}
+
     rows = []
     for d in detections:
         rows.append({
@@ -256,10 +279,33 @@ def run_ivan(image_bgr: np.ndarray, pixels_per_mm: float = 12.5) -> Dict[str, An
             "Density": round(float(d.get("density", 0)), 2),
         })
 
+    stages = []
+    stage_meta = {
+        "Cropped input": ("Chamber Crop ROI", "Physical chamber boundaries cropped to eliminate border lighting and outer glare."),
+        "Greyscale": ("Grayscale Conversion", "Single-channel intensity representation for luminance analysis."),
+        "CLAHE enhancement": ("CLAHE Contrast Equalization", "Adaptive histogram equalization (clip=2.0) amplifying faint ionization trails."),
+        "Background subtraction": ("Gaussian Background Subtraction", "Subtracts low-frequency illumination blur (51x51) to eliminate ambient glow without losing thin tracks."),
+        "Bilateral filter": ("Bilateral Denoising", "Edge-preserving smoothing (d=9, sigma=75) suppressing camera droplet noise while keeping track edges crisp."),
+        "Gaussian smoothing": ("Gaussian Blur", "Light 5x5 smoothing to soften residual pixel noise before thresholding."),
+        "Reflection suppression": ("Reflection Column Masking", "Zeroes out persistent vertical glass reflection bands at columns 160-250 and 660-750."),
+        "Otsu threshold": ("Otsu Binarisation", "Optimal bimodal intensity thresholding isolating particle silhouettes from the dark background."),
+        "Morphological cleanup": ("Morphological Opening & Closing", "5x5 closing to seal tiny gaps followed by 3x3 opening to remove dust blobs."),
+        "Final binary mask": ("Connected Component Mask", "Connected component area filtering (>= 150 px) eliminating speckle noise."),
+    }
+    for k, v in raw_stages.items():
+        title, desc = stage_meta.get(k, (k, "Preprocessing stage"))
+        stages.append({
+            "name": title,
+            "author": "Ivan (Classical Vision)",
+            "desc": desc,
+            "image": v,
+        })
+
     return {
         "annotated_rgb": bgr_to_rgb(annotated),
         "mask_rgb": mask_to_rgb(mask),
         "detections": rows,
+        "stages": stages,
         "summary": f"{len(rows)} candidate tracks detected",
     }
 
@@ -285,9 +331,48 @@ def run_jun_yolo(image_bgr: np.ndarray, confidence: float = 0.20) -> Dict[str, A
     combined = load_combined_pipeline()
     clean_bgr = combined.suppress_osd_and_borders(image_bgr)
     h_orig, w_orig = image_bgr.shape[:2]
-    top_m, bot_m, left_m, right_m = combined.get_chamber_roi_margins(h_orig, w_orig)
 
-    _, raw_detections = inference.detect_image(
+    # Preprocessing stages implemented in Jun/YOLO/preprocessing.py
+    prep = load_module_by_path("jun_prep", JUN_YOLO_DIR / "preprocessing.py")
+    gray = prep._to_grayscale(clean_bgr)
+    denoised = prep.apply_denoise(clean_bgr)
+    dog = prep.apply_dog_high_pass(denoised)
+    otsu = prep.apply_otsu_binarisation(dog)
+
+    stages = [
+        {
+            "name": "1. Camera OSD Guard",
+            "author": "Jun & Team",
+            "desc": "Top timestamp area zeroed to prevent camera overlay numbers from triggering false detections.",
+            "image": clean_bgr,
+        },
+        {
+            "name": "2. Grayscale Conversion",
+            "author": "Jun (YOLO Preprocessor)",
+            "desc": "Single-channel intensity conversion for uniform luminance processing.",
+            "image": gray,
+        },
+        {
+            "name": "3. Fast Non-Local Means Denoising",
+            "author": "Jun (YOLO Preprocessor)",
+            "desc": "Non-local means filter (h=20, template=7, search=21) eliminating high-frequency sensor noise.",
+            "image": denoised,
+        },
+        {
+            "name": "4. Difference of Gaussians (DoG)",
+            "author": "Jun (YOLO Preprocessor)",
+            "desc": "High-pass spatial bandpass filter subtracting broad blur (σ=12) from narrow blur (σ=2) to isolate tracks.",
+            "image": dog,
+        },
+        {
+            "name": "5. Otsu Track Binarisation",
+            "author": "Jun (YOLO Preprocessor)",
+            "desc": "Optimal bimodal binarisation providing 3-channel input representation feeding the YOLO11 model backbone.",
+            "image": otsu,
+        },
+    ]
+
+    annotated_enhanced, raw_detections = inference.detect_image(
         model, clean_bgr, conf=confidence, use_tiling=True, use_tta=False
     )
 
@@ -341,8 +426,10 @@ def run_jun_yolo(image_bgr: np.ndarray, confidence: float = 0.20) -> Dict[str, A
 
     return {
         "annotated_rgb": bgr_to_rgb(annotated),
-        "mask_rgb": None,
+        "annotated_preprocessed_rgb": bgr_to_rgb(annotated_enhanced),
+        "mask_rgb": mask_to_rgb(cv2.cvtColor(otsu, cv2.COLOR_BGR2GRAY) if otsu.ndim == 3 else otsu),
         "detections": rows,
+        "stages": stages,
         "summary": f"{len(rows)} deep learning detections",
     }
 
@@ -352,10 +439,37 @@ def run_weiquan(image_bgr: np.ndarray) -> Dict[str, Any]:
     hough = load_module_by_path("weiquan_hough", WEIQUAN_DIR / "Hough_Transform.py")
     output = image_bgr.copy()
     grey = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    enhanced = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(grey)
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(grey)
+    blurred = cv2.GaussianBlur(clahe, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=20, minLineLength=10, maxLineGap=8)
+
+    stages = [
+        {
+            "name": "1. Grayscale Conversion",
+            "author": "WeiQuan (Hough Transform)",
+            "desc": "Conversion to 8-bit single-channel intensity map.",
+            "image": grey,
+        },
+        {
+            "name": "2. CLAHE Contrast Equalization",
+            "author": "WeiQuan (Hough Transform)",
+            "desc": "Contrast-Limited Adaptive Histogram Equalization amplifying faint trail edges.",
+            "image": clahe,
+        },
+        {
+            "name": "3. Gaussian Smoothing Blur",
+            "author": "WeiQuan (Hough Transform)",
+            "desc": "5x5 Gaussian kernel smoothing high-frequency noise prior to gradient calculation.",
+            "image": blurred,
+        },
+        {
+            "name": "4. Canny Edge Detection",
+            "author": "WeiQuan (Hough Transform)",
+            "desc": "Hysteresis gradient edge detection (50/150 thresholds) extracting track boundary contours.",
+            "image": edges,
+        },
+    ]
 
     rows = []
     if lines is not None:
@@ -384,6 +498,7 @@ def run_weiquan(image_bgr: np.ndarray) -> Dict[str, Any]:
         "annotated_rgb": bgr_to_rgb(output),
         "mask_rgb": mask_to_rgb(edges),
         "detections": rows,
+        "stages": stages,
         "summary": f"{len(rows)} Hough line segments",
     }
 
@@ -395,12 +510,16 @@ def load_tv_analyzer():
 
 
 def run_tv(image_bgr: np.ndarray) -> Dict[str, Any]:
-    """TV's pipeline: Frangi vesselness, skeleton extraction, and distance transform."""
+    """TV's pipeline: Frangi vesselness, skeleton extraction, dot-linking, and distance transform."""
     tv, analyzer = load_tv_analyzer()
-    _, enhanced = analyzer.preprocess(image_bgr)
+    gray, enhanced = analyzer.preprocess(image_bgr)
     curvilinear_map = tv.apply_curvilinear_filter(enhanced, sigmas=analyzer.curvilinear_scales)
-    binary, skeleton = analyzer.segment_tracks(curvilinear_map, threshold_factor=0.72)
-    tracks = analyzer.analyze_trajectories(binary, skeleton, enhanced)
+    # Default to 0.70 threshold matching TV's updated code
+    binary, skeleton = analyzer.segment_tracks(curvilinear_map, threshold_factor=0.70)
+    try:
+        tracks = analyzer.analyze_trajectories(binary, skeleton, enhanced, curvilinear_map)
+    except TypeError:
+        tracks = analyzer.analyze_trajectories(binary, skeleton, enhanced)
     annotated = analyzer.annotate_detections(image_bgr, tracks)
 
     rows = []
@@ -409,6 +528,7 @@ def run_tv(image_bgr: np.ndarray) -> Dict[str, Any]:
             "Track ID": track.get("track_id"),
             "Type": track.get("classification"),
             "Confidence": round(float(track.get("confidence", 0)), 3),
+            "Dots / Fragments": track.get("num_dots", 1),
             "Length (mm)": round(float(track.get("length_cm", 0)) * 10, 2),
             "Thickness (mm)": round(float(track.get("width_mm", 0)), 2),
             "Curvature": round(float(track.get("curvature", 0)), 4),
@@ -416,11 +536,46 @@ def run_tv(image_bgr: np.ndarray) -> Dict[str, Any]:
         })
 
     vesselness = np.clip(curvilinear_map * 255, 0, 255).astype(np.uint8)
+
+    stages = [
+        {
+            "name": "1. Grayscale & OSD Suppression",
+            "author": "TV (Frangi Scale-Space)",
+            "desc": "Converts BGR to grayscale and zeroes out camera status bar in top margin (y < 135).",
+            "image": gray,
+        },
+        {
+            "name": "2. Top-Hat + CLAHE Illumination Levelling",
+            "author": "TV (Frangi Scale-Space)",
+            "desc": "White Top-Hat morphological filtering (31x31 ellipse) blended with bilateral filter and CLAHE.",
+            "image": enhanced,
+        },
+        {
+            "name": "3. Multiscale Frangi Vesselness Filter",
+            "author": "TV (Frangi Scale-Space)",
+            "desc": "Hessian matrix eigenvalue analysis across scales (σ=1.2, 2.0, 3.2, 5.0) isolating tubular structures.",
+            "image": vesselness,
+        },
+        {
+            "name": "4. Adaptive Track Binarization",
+            "author": "TV (Frangi Scale-Space)",
+            "desc": "Adaptive thresholding on vesselness probability map with morphological closing.",
+            "image": binary,
+        },
+        {
+            "name": "5. Centerline Skeletonization",
+            "author": "TV (Frangi Scale-Space)",
+            "desc": "Iterative morphological thinning extracting 1-pixel wide continuous trajectory paths.",
+            "image": skeleton,
+        },
+    ]
+
     return {
         "annotated_rgb": bgr_to_rgb(annotated),
         "mask_rgb": mask_to_rgb(binary),
         "feature_rgb": mask_to_rgb(vesselness),
         "detections": rows,
+        "stages": stages,
         "summary": f"{len(rows)} Frangi vesselness tracks",
     }
 
@@ -438,9 +593,10 @@ def run_combined(
     """Run the integrated hybrid pipeline combining YOLO pattern detection and classical Alpha geometry."""
     combined = load_combined_pipeline()
     effective_conf = min(conf_threshold, 0.10) if recall_mode else conf_threshold
-    annotated, mask, detections = combined.process_image(
+    annotated, mask, detections, stages = combined.process_image(
         image_bgr,
         conf_threshold=effective_conf,
+        collect_stages=True,
     )
 
     rows = []
@@ -449,6 +605,7 @@ def run_combined(
             "Track ID": d.get("track_id"),
             "Type": d.get("type"),
             "Confidence": round(float(d.get("confidence", 0)), 3),
+            "Engine": d.get("source", "Hybrid Ensemble"),
             "Length (mm)": round(float(d.get("length_mm", 0)), 2),
             "Thickness (mm)": round(float(d.get("width_mm", 0)), 2),
             "Curvature": round(float(d.get("curvature", 0)), 4),
@@ -460,6 +617,7 @@ def run_combined(
         "annotated_rgb": bgr_to_rgb(annotated),
         "mask_rgb": mask_to_rgb(mask),
         "detections": rows,
+        "stages": stages,
         "summary": f"{len(rows)} hybrid verified tracks",
     }
 
@@ -891,8 +1049,24 @@ def main():
 
             with col_left:
                 st.markdown("##### Annotated Particle Tracks")
+                if res.get("annotated_preprocessed_rgb") is not None:
+                    bg_choice = st.radio(
+                        "Track Visualization Background:",
+                        ["Raw Camera Colors (BGR)", "Preprocessed Frame (DoG + Otsu [YOLO Model Input])"],
+                        horizontal=True,
+                        key=f"bg_choice_{selected_pipeline_name}_{image_name}",
+                        help="Toggle between the camera frame and the preprocessed frame (Otsu-binarised Difference of Gaussians) that YOLO detects on.",
+                    )
+                    active_ann = (
+                        res["annotated_preprocessed_rgb"]
+                        if "Preprocessed" in bg_choice
+                        else res["annotated_rgb"]
+                    )
+                else:
+                    active_ann = res["annotated_rgb"]
+
                 st.image(
-                    res["annotated_rgb"],
+                    active_ann,
                     caption=f"Annotated frame with bounding boxes and track badges · {n_total} detections",
                     use_container_width=True,
                 )
@@ -913,6 +1087,78 @@ def main():
                     )
                 with st.expander("🔍 View Raw Unprocessed Input Frame"):
                     st.image(bgr_to_rgb(current_bgr), caption="Raw input frame", use_container_width=True)
+
+            # -----------------------------------------------------------------
+            # Interactive Preprocessing & Filter Stages Explorer
+            # -----------------------------------------------------------------
+            stages = res.get("stages", [])
+            if stages:
+                st.markdown("---")
+                st.markdown("### 🔬 Pipeline Preprocessing & Filter Stages Explorer")
+                st.caption(
+                    f"Interactive visual inspection of all {len(stages)} intermediate filtering and transformation "
+                    f"stages executed by **{selected_pipeline_name}**."
+                )
+
+                # Selector for detailed inspection
+                stage_labels = [f"Stage {i+1}: {s['name']}" for i, s in enumerate(stages)]
+                selected_idx = st.selectbox(
+                    "🔍 Select Preprocessing Stage to Inspect in High Resolution:",
+                    range(len(stages)),
+                    format_func=lambda i: stage_labels[i],
+                    key=f"stage_select_{selected_pipeline_name}_{image_name}",
+                )
+
+                selected_stage = stages[selected_idx]
+                disp_img = format_stage_image_for_display(selected_stage["image"])
+
+                stage_col1, stage_col2 = st.columns([1.3, 1])
+                with stage_col1:
+                    st.image(
+                        disp_img,
+                        caption=f"{stage_labels[selected_idx]} ({selected_stage.get('author', 'Architecture')})",
+                        use_container_width=True,
+                    )
+                with stage_col2:
+                    st.markdown(
+                        f"""
+                        <div style="background:#111827;padding:1.25rem;border-radius:12px;border:1px solid #1f2937;">
+                            <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;color:#38bdf8;font-weight:700;">
+                                Originator / Architecture
+                            </div>
+                            <div style="font-size:1.15rem;font-weight:600;color:#f3f4f6;margin-bottom:0.75rem;">
+                                {selected_stage.get('author', 'Integrated Hybrid')}
+                            </div>
+                            <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;">
+                                Transformation Purpose & Mechanism
+                            </div>
+                            <div style="font-size:0.92rem;line-height:1.6;color:#cbd5e1;margin-bottom:1rem;">
+                                {selected_stage.get('desc', 'Intermediate filter output.')}
+                            </div>
+                            <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em;color:#94a3b8;font-weight:700;">
+                                Technical Diagnostics
+                            </div>
+                            <div style="font-size:0.85rem;color:#94a3b8;line-height:1.7;">
+                                • Resolution: <code>{selected_stage['image'].shape[1]} × {selected_stage['image'].shape[0]} px</code><br>
+                                • Channels: <code>{1 if selected_stage['image'].ndim == 2 else selected_stage['image'].shape[2]}</code><br>
+                                • Value Range: <code>[{selected_stage['image'].min()}, {selected_stage['image'].max()}]</code>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                # Filmstrip of all stages
+                st.markdown("##### 🎞️ Sequential Transformation Filmstrip")
+                st.caption("Visual progression from raw chamber frame to final track segmentation:")
+                film_cols = st.columns(min(len(stages), 6))
+                for idx, (f_col, stage_item) in enumerate(zip(film_cols, stages)):
+                    with f_col:
+                        st.image(
+                            format_stage_image_for_display(stage_item["image"]),
+                            caption=f"{idx+1}. {stage_item['name'].split('.')[-1].strip()}",
+                            use_container_width=True,
+                        )
 
         # TAB 2: ANALYTICS & CHARTS
         with tab_charts:
@@ -1062,8 +1308,15 @@ def main():
                 )
 
                 if dets:
-                    with st.expander("View Measurements"):
+                    with st.expander("📋 View Measurements Table"):
                         st.dataframe(df_c, hide_index=True, use_container_width=True)
+
+                if res.get("stages"):
+                    with st.expander(f"🔬 Preprocessing Stages ({len(res['stages'])})"):
+                        for stg_i, stg in enumerate(res["stages"], 1):
+                            st.caption(f"**{stg_i}. {stg['name']}** · *{stg.get('author', '')}*")
+                            st.image(format_stage_image_for_display(stg["image"]), use_container_width=True)
+                            st.caption(stg.get("desc", ""))
 
     # -------------------------------------------------------------------------
     # Mode 3: Batch / Multi-Image Ingestion (Rubric Extra Effort)
