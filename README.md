@@ -1,29 +1,29 @@
-# Cloud Chamber Particle Track Classification[cite: 1]
+# Cloud Chamber Particle Track Classification
 
-An image processing and computer vision project developed for **BMDS2133 Image Processing** at **Tunku Abdul Rahman University of Management and Technology (TARUMT)**[cite: 1].
+An image processing and computer vision project developed for **BMDS2133 Image Processing** at **Tunku Abdul Rahman University of Management and Technology (TARUMT)**.
 
-## Project Overview[cite: 1]
-This project automatically isolates, detects, and classifies subatomic particle condensation trails (alpha particles vs. electrons) captured inside a cloud chamber[cite: 1]. Alpha particles produce thick, short, straight trails, whereas electrons produce thinner, scattered, curved tracks[cite: 1].
+## Project Overview
+This project automatically isolates, detects, and classifies subatomic particle condensation trails (alpha particles vs. electrons) captured inside a cloud chamber. Alpha particles produce thick, short, straight trails, whereas electrons produce thinner, scattered, curved tracks.
 
-## Team Members & Assigned Modules[cite: 1]
-* **Ho Jun Quan (25WMR09949)** — Fast Non-Local Means Denoising + Difference of Gaussians + YOLO[cite: 1]
-* **Ivan A/L Raju (25WMR09952)** — Otsu Thresholding + Bounding Box Geometry[cite: 1]
-* **Lee Wei Quan (25WMR09982)** — Probabilistic Hough Transform[cite: 1]
-* **Liau Tshin Vui (25WMR09988)** — Curvilinear Filtering[cite: 1]
+## Team Members & Assigned Modules
+* **Ho Jun Quan (25WMR09949)** — Fast Non-Local Means Denoising + Difference of Gaussians + YOLO
+* **Ivan A/L Raju (25WMR09952)** — Otsu Thresholding + Bounding Box Geometry
+* **Lee Wei Quan (25WMR09982)** — Probabilistic Hough Transform
+* **Liau Tshin Vui (25WMR09988)** — Curvilinear Filtering
 
-## Objectives[cite: 1]
-* **Objective 1:** Develop and implement four distinct classical image processing pipelines capable of isolating and extracting geometric features from cloud chamber particle tracks prior to the experimental testing phase[cite: 1].
-* **Objective 2:** Evaluate the quantitative performance of the implemented pipelines by benchmarking classification accuracy and computational efficiency against a reference dataset by the completion of prototype development[cite: 1].
-* **Objective 3:** Formulate an enhanced, hybrid image processing solution that improves overall particle classification accuracy by integrating the highest-performing algorithmic components before final documentation submission[cite: 1].
+## Objectives
+* **Objective 1:** Develop and implement four distinct classical image processing pipelines capable of isolating and extracting geometric features from cloud chamber particle tracks prior to the experimental testing phase.
+* **Objective 2:** Evaluate the quantitative performance of the implemented pipelines by benchmarking classification accuracy and computational efficiency against a reference dataset by the completion of prototype development.
+* **Objective 3:** Formulate an enhanced, hybrid image processing solution that improves overall particle classification accuracy by integrating the highest-performing algorithmic components before final documentation submission.
 
-## Dataset[cite: 1]
-* **Source:** DIY Cloud Chamber video recordings sourced from *Projek Kebuk Awan*[cite: 1].
-* **Format:** High-framerate video frames containing visible ionization tracks at $1080 \times 1920$ resolution[cite: 1].
+## Dataset
+* **Source:** DIY Cloud Chamber video recordings sourced from *Projek Kebuk Awan*.
+* **Format:** High-framerate video frames containing visible ionization tracks at $1080 \times 1920$ resolution.
 
-## Repository Link[cite: 1]
-* **GitHub:** [ImageProcessingAssignment Repository](https://github.com/ho-jun-quan/ImageProcessingAssignment)[cite: 1]
+## Repository Link
+* **GitHub:** [ImageProcessingAssignment Repository](https://github.com/ho-jun-quan/ImageProcessingAssignment)
 
-## Academic Information[cite: 1]
-* **Programme:** Bachelor in Software Engineering (Honours)[cite: 1]
-* **Tutor:** Ms Thamarai[cite: 1]
-* **Semester:** 202606[cite: 1]
+## Academic Information
+* **Programme:** Bachelor in Software Engineering (Honours)
+* **Tutor:** Ms Thamarai
+* **Semester:** 202606
