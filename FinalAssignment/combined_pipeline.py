@@ -459,12 +459,24 @@ def process_image(
             )
 
             raw_class = det.get("class_name", "")
+            cls_id = int(det.get("class_id", -1))
             if is_alpha or ("Alpha" in raw_class and is_alpha):
                 p_type = "Alpha"
                 confidence = max(det.get("confidence", 0.85), 0.88)
                 width_mm = max(est_width_mm, 1.60)
+            elif cls_id == 3 or any(k in raw_class for k in ("Low_Energy", "Low Energy", "Low-E")):
+                p_type = "Low-Energy Electron"
+                confidence = det.get("confidence", 0.80)
+                width_mm = max(0.35, min(est_width_mm, 1.10))
+            elif cls_id == 4 or any(k in raw_class for k in ("Knock_On", "Secondary", "Knock-On")):
+                p_type = "Knock-On Electron"
+                confidence = det.get("confidence", 0.80)
+                width_mm = max(0.40, min(est_width_mm, 1.20))
             else:
-                p_type = "Electron"
+                if tortuosity > 0.40 and length_mm < 16.0:
+                    p_type = "Low-Energy Electron"
+                else:
+                    p_type = "Normal Electron"
                 confidence = det.get("confidence", 0.80)
                 width_mm = max(0.40, min(est_width_mm, 1.20))
 
@@ -516,7 +528,10 @@ def process_image(
             confidence = round(min(0.92, 0.72 + density * 0.22), 2)
             width_mm = max(est_width_mm, 1.60)
         else:
-            p_type = "Electron"
+            if tortuosity > 0.40 and length_mm < 16.0:
+                p_type = "Low-Energy Electron"
+            else:
+                p_type = "Normal Electron"
             confidence = round(min(0.88, 0.60 + min(1.0, cand["aspect_ratio"] / 8.0) * 0.25), 2)
             width_mm = max(0.40, min(est_width_mm, 1.20))
 
@@ -541,18 +556,32 @@ def process_image(
 
 
     # 3. Draw clean, professional annotations on the ORIGINAL image
-    COLOR_ALPHA = (0, 255, 255)    # Yellow in BGR
-    COLOR_ELECTRON = (0, 0, 255)   # Red in BGR
+    COLOR_ALPHA = (0, 215, 255)         # Yellow in BGR
+    COLOR_NORMAL_E = (255, 180, 50)     # Sky Blue in BGR
+    COLOR_LOW_E = (0, 140, 255)         # Orange in BGR
+    COLOR_KNOCK_ON = (255, 0, 255)      # Magenta in BGR
 
     for d in detections:
         x, y, w, h = d["bbox"]
-        color = COLOR_ALPHA if d["type"] == "Alpha" else COLOR_ELECTRON
+        t = d["type"]
+        if t == "Alpha":
+            color = COLOR_ALPHA
+            badge_title = "Alpha"
+        elif t == "Low-Energy Electron":
+            color = COLOR_LOW_E
+            badge_title = "Low-E e-"
+        elif t == "Knock-On Electron":
+            color = COLOR_KNOCK_ON
+            badge_title = "Knock-On"
+        else:
+            color = COLOR_NORMAL_E
+            badge_title = "Normal e-"
 
         # Draw bounding box
         cv2.rectangle(annotated, (x, y), (x + w, y + h), color, 2)
 
         # Label badge
-        label = f"#{d['track_id']} {d['type']} ({d['confidence']*100:.0f}%)"
+        label = f"#{d['track_id']} {badge_title} ({d['confidence']*100:.0f}%)"
         sub_label = f"L:{d['length_cm']:.1f}cm W:{d['width_mm']:.1f}mm"
 
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -570,17 +599,23 @@ def process_image(
 
     # Top Header Legend
     n_alpha = sum(1 for d in detections if d["type"] == "Alpha")
-    n_elec = sum(1 for d in detections if d["type"] == "Electron")
+    n_norm_e = sum(1 for d in detections if d["type"] == "Normal Electron")
+    n_low_e = sum(1 for d in detections if d["type"] == "Low-Energy Electron")
+    n_knock = sum(1 for d in detections if d["type"] == "Knock-On Electron")
 
     cv2.rectangle(annotated, (0, 0), (w_orig, 36), (15, 15, 15), -1)
     font = cv2.FONT_HERSHEY_SIMPLEX
     cv2.rectangle(annotated, (15, 10), (28, 25), COLOR_ALPHA, -1)
-    cv2.putText(annotated, "Alpha (Yellow, Thick/Dense)", (34, 22), font, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.rectangle(annotated, (270, 10), (283, 25), COLOR_ELECTRON, -1)
-    cv2.putText(annotated, "Electron (Red, Thin/Curved)", (289, 22), font, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(annotated, "Alpha", (34, 22), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.rectangle(annotated, (100, 10), (113, 25), COLOR_NORMAL_E, -1)
+    cv2.putText(annotated, "Normal e-", (119, 22), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.rectangle(annotated, (215, 10), (228, 25), COLOR_LOW_E, -1)
+    cv2.putText(annotated, "Low-E e-", (234, 22), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.rectangle(annotated, (325, 10), (338, 25), COLOR_KNOCK_ON, -1)
+    cv2.putText(annotated, "Knock-On", (344, 22), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
-    summary_text = f"Total Detected: {len(detections)} (Alpha: {n_alpha}, Electron: {n_elec})"
-    cv2.putText(annotated, summary_text, (w_orig - 310, 22), font, 0.44, (100, 255, 100), 1, cv2.LINE_AA)
+    summary_text = f"Total: {len(detections)} (α:{n_alpha} e⁻:{n_norm_e} LE:{n_low_e} δ:{n_knock})"
+    cv2.putText(annotated, summary_text, (w_orig - 340, 22), font, 0.42, (100, 255, 100), 1, cv2.LINE_AA)
 
     if collect_stages:
         stages = get_hybrid_preprocessing_stages(raw_img)

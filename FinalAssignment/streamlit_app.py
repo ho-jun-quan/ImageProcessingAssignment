@@ -71,7 +71,9 @@ st.markdown(
         --card-bg: #111827;
         --border-color: #1f2937;
         --alpha-color: #f59e0b;
-        --electron-color: #ef4444;
+        --electron-color: #38bdf8;
+        --low-e-color: #eab308;
+        --knock-on-color: #ec4899;
     }
     
     /* Global styling */
@@ -186,8 +188,10 @@ st.markdown(
         font-weight: 600;
     }
     .kpi-alpha { color: #f59e0b; }
-    .kpi-electron { color: #ef4444; }
-    .kpi-total { color: #38bdf8; }
+    .kpi-electron { color: #38bdf8; }
+    .kpi-low-e { color: #eab308; }
+    .kpi-knock-on { color: #ec4899; }
+    .kpi-total { color: #ffffff; }
 
     /* Custom buttons and tabs */
     div.stButton > button:first-child {
@@ -269,13 +273,26 @@ def run_ivan(image_bgr: np.ndarray, pixels_per_mm: float = 12.5) -> Dict[str, An
 
     rows = []
     for d in detections:
+        raw_type = d.get("type", "Unknown")
+        len_val = round(float(d.get("length_mm", d.get("max_dim", 0) / pixels_per_mm)), 2)
+        ar_val = round(float(d.get("ar", 0)), 2)
+        if raw_type == "Alpha":
+            std_type = "Alpha"
+        elif raw_type == "Electron":
+            if ar_val < 2.8 and len_val < 16.0:
+                std_type = "Low-Energy Electron"
+            else:
+                std_type = "Normal Electron"
+        else:
+            std_type = raw_type
+
         rows.append({
             "Track ID": d.get("id", len(rows) + 1),
-            "Type": d.get("type", "Unknown"),
+            "Type": std_type,
             "Confidence": round(float(d.get("density", 0.85)), 2),
-            "Length (mm)": round(float(d.get("length_mm", d.get("max_dim", 0) / pixels_per_mm)), 2),
+            "Length (mm)": len_val,
             "Thickness (mm)": round(float(d.get("thickness_mm", d.get("min_dim", 0) / pixels_per_mm)), 2),
-            "Aspect Ratio": round(float(d.get("ar", 0)), 2),
+            "Aspect Ratio": ar_val,
             "Density": round(float(d.get("density", 0)), 2),
         })
 
@@ -394,16 +411,32 @@ def run_jun_yolo(image_bgr: np.ndarray, confidence: float = 0.20) -> Dict[str, A
             continue  # bottom tray edge
 
         raw_class = item.get("class_name", "Unknown")
-        std_class = "Alpha" if ("Alpha" in raw_class or "Proton" in raw_class) else "Electron"
+        cls_id = int(item.get("class_id", -1))
         conf_val = float(item.get("confidence", 0))
         len_mm = float(item.get("length_mm", 0))
 
-        # Color coding: Yellow for Alpha, Red for Electron
-        box_color = (0, 255, 255) if std_class == "Alpha" else (0, 0, 255)
+        # Separate classifications for Normal Electron, Low-Energy Electron, and Knock-On (Secondary) Electron
+        if cls_id in (0, 1) or "Alpha" in raw_class or "Proton" in raw_class:
+            std_class = "Alpha"
+            badge_name = "Alpha"
+            box_color = (0, 215, 255)       # Amber / Yellow in BGR
+        elif cls_id == 3 or any(k in raw_class for k in ("Low_Energy", "Low Energy", "Low-E")):
+            std_class = "Low-Energy Electron"
+            badge_name = "Low-E e-"
+            box_color = (0, 140, 255)       # Orange in BGR
+        elif cls_id == 4 or any(k in raw_class for k in ("Knock_On", "Secondary", "Knock-On")):
+            std_class = "Knock-On Electron"
+            badge_name = "Knock-On e-"
+            box_color = (255, 0, 255)       # Magenta in BGR
+        else:
+            std_class = "Normal Electron"
+            badge_name = "Normal e-"
+            box_color = (255, 180, 50)       # Sky Blue in BGR
+
         cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
         cv2.putText(
             annotated,
-            f"#{track_idx} {std_class} ({conf_val*100:.0f}%)",
+            f"#{track_idx} {badge_name} ({conf_val*100:.0f}%)",
             (x1, max(20, y1 - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
@@ -524,15 +557,33 @@ def run_tv(image_bgr: np.ndarray) -> Dict[str, Any]:
 
     rows = []
     for track in tracks:
+        raw_cls = track.get("classification", "Unknown")
+        len_val = round(float(track.get("length_cm", 0)) * 10, 2)
+        curv_val = float(track.get("curvature", 0))
+        tort_val = float(track.get("tortuosity", 0))
+        dots_val = track.get("num_dots", 1)
+
+        if raw_cls == "Alpha":
+            std_type = "Alpha"
+        elif raw_cls == "Electron":
+            if (tort_val > 0.35 or curv_val > 0.40) and len_val < 18.0:
+                std_type = "Low-Energy Electron"
+            elif dots_val > 2 and curv_val > 0.28:
+                std_type = "Knock-On Electron"
+            else:
+                std_type = "Normal Electron"
+        else:
+            std_type = raw_cls
+
         rows.append({
             "Track ID": track.get("track_id"),
-            "Type": track.get("classification"),
+            "Type": std_type,
             "Confidence": round(float(track.get("confidence", 0)), 3),
-            "Dots / Fragments": track.get("num_dots", 1),
-            "Length (mm)": round(float(track.get("length_cm", 0)) * 10, 2),
+            "Dots / Fragments": dots_val,
+            "Length (mm)": len_val,
             "Thickness (mm)": round(float(track.get("width_mm", 0)), 2),
-            "Curvature": round(float(track.get("curvature", 0)), 4),
-            "Tortuosity": round(float(track.get("tortuosity", 0)), 4),
+            "Curvature": round(curv_val, 4),
+            "Tortuosity": round(tort_val, 4),
         })
 
     vesselness = np.clip(curvilinear_map * 255, 0, 255).astype(np.uint8)
@@ -995,11 +1046,13 @@ def main():
         n_total = len(detections)
         if not df.empty and "Type" in df.columns:
             n_alpha = int((df["Type"] == "Alpha").sum())
-            n_electron = int((df["Type"] == "Electron").sum())
+            n_norm_electron = int((df["Type"].isin(["Normal Electron", "Electron"])).sum())
+            n_low_e = int((df["Type"] == "Low-Energy Electron").sum())
+            n_knock_on = int((df["Type"] == "Knock-On Electron").sum())
             avg_length = round(float(df["Length (mm)"].mean()), 1) if "Length (mm)" in df.columns else 0.0
             avg_thick = round(float(df["Thickness (mm)"].mean()), 2) if "Thickness (mm)" in df.columns else 0.0
         else:
-            n_alpha, n_electron, avg_length, avg_thick = 0, 0, 0.0, 0.0
+            n_alpha, n_norm_electron, n_low_e, n_knock_on, avg_length, avg_thick = 0, 0, 0, 0, 0.0, 0.0
 
         # KPI Dashboard Cards
         st.markdown(
@@ -1011,9 +1064,19 @@ def main():
                     <span class="pill" style="color: #f59e0b;">Thick & Dense</span>
                 </div>
                 <div class="kpi-card">
-                    <div class="kpi-lbl">Electron Particles</div>
-                    <div class="kpi-val kpi-electron">{n_electron}</div>
-                    <span class="pill" style="color: #ef4444;">Thin / Deflected</span>
+                    <div class="kpi-lbl">Normal Electrons</div>
+                    <div class="kpi-val kpi-electron">{n_norm_electron}</div>
+                    <span class="pill" style="color: #38bdf8;">Thin / Extended β⁻</span>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-lbl">Low-Energy Electrons</div>
+                    <div class="kpi-val kpi-low-e">{n_low_e}</div>
+                    <span class="pill" style="color: #eab308;">Curled / Squiggly</span>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-lbl">Knock-On Electrons</div>
+                    <div class="kpi-val kpi-knock-on">{n_knock_on}</div>
+                    <span class="pill" style="color: #ec4899;">Secondary Ejected</span>
                 </div>
                 <div class="kpi-card">
                     <div class="kpi-lbl">Total Tracks</div>
@@ -1024,11 +1087,6 @@ def main():
                     <div class="kpi-lbl">Mean Length</div>
                     <div class="kpi-val">{avg_length} <span style="font-size:0.9rem;color:#94a3b8;">mm</span></div>
                     <span class="pill">{(avg_length/10.0):.2f} cm</span>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-lbl">Mean Thickness</div>
-                    <div class="kpi-val">{avg_thick} <span style="font-size:0.9rem;color:#94a3b8;">mm</span></div>
-                    <span class="pill">Speed: {elapsed:.2f}s</span>
                 </div>
             </div>
             """,
@@ -1177,7 +1235,7 @@ def main():
                         color="Type",
                         height=350,
                     )
-                    st.caption("Alpha particles cluster in the high-thickness zone (≥ 1.4 mm); electrons occupy lower thicknesses.")
+                    st.caption("Alpha particles cluster in the high-thickness zone (≥ 1.4 mm); normal electrons occupy thin extended tracks (< 1.2 mm); low-energy electrons form short curly clusters; knock-on events exhibit secondary track branching.")
 
                 with chart_col2:
                     st.markdown("###### Particle Class Composition")
@@ -1229,7 +1287,9 @@ def main():
 ## 1. Executive Summary
 - **Total Detected Particle Tracks:** {n_total}
 - **Alpha Particle Candidates:** {n_alpha} ({round(n_alpha/max(1,n_total)*100, 1)}%)
-- **Electron / Beta Candidates:** {n_electron} ({round(n_electron/max(1,n_total)*100, 1)}%)
+- **Normal Electron (Beta) Candidates:** {n_norm_electron} ({round(n_norm_electron/max(1,n_total)*100, 1)}%)
+- **Low-Energy Electron Candidates:** {n_low_e} ({round(n_low_e/max(1,n_total)*100, 1)}%)
+- **Knock-On Electron Candidates (Delta Rays):** {n_knock_on} ({round(n_knock_on/max(1,n_total)*100, 1)}%)
 - **Average Track Length:** {avg_length} mm ({round(avg_length/10.0, 2)} cm)
 - **Average Ionization Column Width (Thickness):** {avg_thick} mm
 
@@ -1241,9 +1301,17 @@ def main():
    - In cloud chambers, they create dense, continuous condensation columns typically exceeding **1.4 mm** in width.
    - Due to their heavy mass (~4 amu), their momentum resists deflection, maintaining straight trajectories.
 
-2. **Electron / Beta Radiation Evidence:**
-   - Electrons ($e^-$ / $\beta$) produce sparse ionization, yielding wispy tracks with widths under **1.4 mm**.
-   - Readily scattered by background gas collisions and curled by magnetic deflection.
+2. **Normal Electron / Beta Radiation Evidence:**
+   - Energetic electrons ($e^-$ / $\beta$) produce sparse ionization, yielding wispy, extended tracks with widths under **1.2 mm**.
+   - Higher kinetic energy allows them to penetrate further before undergoing substantial deflection.
+
+3. **Low-Energy Electron Evidence:**
+   - Low-energy beta electrons undergo intense multiple Coulomb scattering with ambient vapor molecules.
+   - Exhibited as short, highly tortuous, curled or squiggly trajectories with low aspect ratios.
+
+4. **Knock-On Electron (Delta Ray) Evidence:**
+   - A primary charged particle collides with an atomic orbital electron, transferring sufficient kinetic energy to eject a secondary track.
+   - Observed as a branched trajectory or secondary vertex diverging from the primary ionization track.
 
 ---
 *Report automatically generated by BMDS2133 Cloud Chamber Lab Application.*
@@ -1293,15 +1361,19 @@ def main():
 
                 dets = res.get("detections", [])
                 df_c = pd.DataFrame(dets)
-                n_a = (df_c["Type"] == "Alpha").sum() if not df_c.empty and "Type" in df_c.columns else 0
-                n_e = (df_c["Type"] == "Electron").sum() if not df_c.empty and "Type" in df_c.columns else 0
+                n_a = int((df_c["Type"] == "Alpha").sum()) if not df_c.empty and "Type" in df_c.columns else 0
+                n_ne = int((df_c["Type"].isin(["Normal Electron", "Electron"])).sum()) if not df_c.empty and "Type" in df_c.columns else 0
+                n_le = int((df_c["Type"] == "Low-Energy Electron").sum()) if not df_c.empty and "Type" in df_c.columns else 0
+                n_ko = int((df_c["Type"] == "Knock-On Electron").sum()) if not df_c.empty and "Type" in df_c.columns else 0
 
                 st.markdown(
                     f"""
-                    <div style="background:#111827;padding:0.75rem;border-radius:8px;border:1px solid #1f2937;margin-top:0.5rem;">
+                    <div style="background:#111827;padding:0.75rem;border-radius:8px;border:1px solid #1f2937;margin-top:0.5rem;font-size:0.85rem;line-height:1.6;">
                         <b>Total:</b> {len(dets)} tracks<br>
                         <span style="color:#f59e0b;">● Alpha:</span> {n_a} &nbsp;|&nbsp; 
-                        <span style="color:#ef4444;">● Electron:</span> {n_e}
+                        <span style="color:#38bdf8;">● Normal e⁻:</span> {n_ne}<br>
+                        <span style="color:#eab308;">● Low-E e⁻:</span> {n_le} &nbsp;|&nbsp; 
+                        <span style="color:#ec4899;">● Knock-On e⁻:</span> {n_ko}
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1351,14 +1423,18 @@ def main():
                     dets = res.get("detections", [])
                     df_b = pd.DataFrame(dets)
                     n_a = int((df_b["Type"] == "Alpha").sum()) if not df_b.empty and "Type" in df_b.columns else 0
-                    n_e = int((df_b["Type"] == "Electron").sum()) if not df_b.empty and "Type" in df_b.columns else 0
+                    n_ne = int((df_b["Type"].isin(["Normal Electron", "Electron"])).sum()) if not df_b.empty and "Type" in df_b.columns else 0
+                    n_le = int((df_b["Type"] == "Low-Energy Electron").sum()) if not df_b.empty and "Type" in df_b.columns else 0
+                    n_ko = int((df_b["Type"] == "Knock-On Electron").sum()) if not df_b.empty and "Type" in df_b.columns else 0
                     avg_l = round(float(df_b["Length (mm)"].mean()), 2) if not df_b.empty and "Length (mm)" in df_b.columns else 0.0
 
                     batch_summary_rows.append({
                         "Image": f_name,
                         "Total Tracks": len(dets),
-                        "Alpha Count": n_a,
-                        "Electron Count": n_e,
+                        "Alpha": n_a,
+                        "Normal e⁻": n_ne,
+                        "Low-E e⁻": n_le,
+                        "Knock-On e⁻": n_ko,
                         "Mean Length (mm)": avg_l,
                     })
 
@@ -1371,8 +1447,10 @@ def main():
                     batch_summary_rows.append({
                         "Image": f_name,
                         "Total Tracks": 0,
-                        "Alpha Count": 0,
-                        "Electron Count": 0,
+                        "Alpha": 0,
+                        "Normal e⁻": 0,
+                        "Low-E e⁻": 0,
+                        "Knock-On e⁻": 0,
                         "Mean Length (mm)": 0.0,
                         "Error": str(e),
                     })
@@ -1538,14 +1616,18 @@ def main():
                             cv2_writer.write(ann_bgr)
 
                         n_alpha = sum(1 for d in dets if d.get("Type") == "Alpha")
-                        n_elec = sum(1 for d in dets if d.get("Type") == "Electron")
+                        n_norm_e = sum(1 for d in dets if d.get("Type") in ["Normal Electron", "Electron"])
+                        n_low_e = sum(1 for d in dets if d.get("Type") == "Low-Energy Electron")
+                        n_knock = sum(1 for d in dets if d.get("Type") == "Knock-On Electron")
 
                         timeline_records.append({
                             "Frame": current_frame_idx,
                             "Time (s)": round(t_sec, 2),
                             "Total Tracks": len(dets),
                             "Alpha Tracks": n_alpha,
-                            "Electron Tracks": n_elec,
+                            "Normal Electron Tracks": n_norm_e,
+                            "Low-Energy Electron Tracks": n_low_e,
+                            "Knock-On Tracks": n_knock,
                         })
 
                         for d in dets:
@@ -1602,7 +1684,12 @@ def main():
                 st.markdown("##### Temporal Particle Activity Timeline")
                 if timeline_records:
                     tdf = pd.DataFrame(timeline_records)
-                    st.line_chart(tdf, x="Time (s)", y=["Total Tracks", "Alpha Tracks", "Electron Tracks"], height=350)
+                    st.line_chart(
+                        tdf,
+                        x="Time (s)",
+                        y=["Total Tracks", "Alpha Tracks", "Normal Electron Tracks", "Low-Energy Electron Tracks", "Knock-On Tracks"],
+                        height=350,
+                    )
                     st.caption("Temporal plot showing particle occurrence bursts over the recording duration.")
                 else:
                     st.info("No temporal records available.")
