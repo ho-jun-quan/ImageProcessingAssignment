@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cloud Chamber Particle Detector</title>
+    <title>Cloud Chamber HoughLinesP Trajectory Evidence</title>
     <style>
         :root {
             --bg:          #0d1117;
@@ -12,8 +12,9 @@
             --border:      #30363d;
             --text:        #e6edf3;
             --text-dim:    #8b949e;
-            --alpha-color: #f85149;
-            --electron-color: #f0c000;
+            --straight-color: #3fb950;
+            --curved-color: #f0c000;
+            --uncertain-color: #8b949e;
             --accent:      #58a6ff;
             --radius:      12px;
         }
@@ -91,7 +92,7 @@
         /* Stats Cards */
         .stats {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 16px;
         }
 
@@ -112,8 +113,9 @@
             flex-shrink: 0;
         }
 
-        .stat-card .dot.alpha { background: var(--alpha-color); box-shadow: 0 0 10px var(--alpha-color); }
-        .stat-card .dot.electron { background: var(--electron-color); box-shadow: 0 0 10px var(--electron-color); }
+        .stat-card .dot.straight { background: var(--straight-color); box-shadow: 0 0 10px var(--straight-color); }
+        .stat-card .dot.curved { background: var(--curved-color); box-shadow: 0 0 10px var(--curved-color); }
+        .stat-card .dot.uncertain { background: var(--uncertain-color); box-shadow: 0 0 10px var(--uncertain-color); }
 
         .stat-card .stat-label {
             color: var(--text-dim);
@@ -249,66 +251,17 @@
             font-weight: 600;
         }
 
-        .badge.alpha   { background: rgba(248,81,73,0.15); color: var(--alpha-color); }
-        .badge.electron { background: rgba(240,192,0,0.15); color: var(--electron-color); }
+        .badge.straight { background: rgba(63,185,80,0.15); color: var(--straight-color); }
+        .badge.curved { background: rgba(240,192,0,0.15); color: var(--curved-color); }
+        .badge.uncertain { background: rgba(139,148,158,0.15); color: var(--uncertain-color); }
 
         .det-table-scroll { max-height: 320px; overflow-y: auto; }
-
-        /* Processing stages */
-        .stages-panel {
-            display: none;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
-        }
-
-        .stages-panel.visible { display: block; }
-
-        .stages-header {
-            padding: 16px 20px;
-            font-weight: 600;
-            font-size: 14px;
-            border-bottom: 1px solid var(--border);
-            background: var(--surface-2);
-        }
-
-        .stages-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 14px;
-            padding: 16px;
-        }
-
-        .stage-card {
-            min-width: 0;
-            border: 1px solid var(--border);
-            background: var(--surface-2);
-        }
-
-        .stage-card img {
-            display: block;
-            width: 100%;
-            aspect-ratio: 880 / 1520;
-            object-fit: contain;
-            background: #05070a;
-        }
-
-        .stage-card figcaption {
-            padding: 9px 10px;
-            color: var(--text-dim);
-            font-size: 12px;
-        }
-
-        @media (max-width: 680px) {
-            .stages-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 10px; }
-        }
 
         /* Error toast */
         .error-msg {
             background: rgba(248,81,73,0.12);
-            border: 1px solid var(--alpha-color);
-            color: var(--alpha-color);
+            border: 1px solid var(--curved-color);
+            color: var(--curved-color);
             padding: 12px 20px;
             border-radius: var(--radius);
             display: none;
@@ -316,183 +269,16 @@
         }
 
         .error-msg.visible { display: block; }
-
-        /* Calibration overlay */
-        .calibration-modal {
-            position: fixed;
-            inset: 0;
-            z-index: 10;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 24px;
-            background: rgba(0, 0, 0, 0.82);
-        }
-
-        .calibration-modal.visible { display: flex; }
-
-        .calibration-panel {
-            width: min(900px, 100%);
-            max-height: 95vh;
-            overflow: auto;
-            padding: 20px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-
-        .calibration-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            margin-bottom: 14px;
-        }
-
-        .calibration-header h2 { font-size: 17px; }
-        .calibration-status { color: var(--text-dim); font-size: 13px; }
-
-        .calibration-stage {
-            position: relative;
-            width: 100%;
-            text-align: center;
-            background: #05070a;
-        }
-
-        #calibrationCanvas {
-            display: block;
-            max-width: 100%;
-            max-height: 68vh;
-            width: auto;
-            height: auto;
-            margin: 0 auto;
-            cursor: crosshair;
-        }
-
-        .calibration-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-            margin-top: 14px;
-        }
-
-        .calibration-actions button {
-            padding: 9px 14px;
-            color: var(--text);
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-        .calibration-actions button:hover { border-color: var(--accent); }
-        .calibration-actions .apply { background: var(--accent); color: #07111f; border-color: var(--accent); }
-        .calibration-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
-
-        /* Workflow navigation */
-        .workflow-nav {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            padding: 6px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-
-        .workflow-step {
-            padding: 11px 10px;
-            color: var(--text-dim);
-            background: transparent;
-            border: 1px solid transparent;
-            border-radius: 7px;
-            cursor: pointer;
-            text-align: left;
-        }
-
-        .workflow-step:hover,
-        .workflow-step.active {
-            color: var(--text);
-            background: rgba(88, 166, 255, 0.12);
-            border-color: var(--accent);
-        }
-
-        .workflow-step .step-number {
-            display: inline-block;
-            min-width: 20px;
-            margin-right: 5px;
-            color: var(--accent);
-            font-size: 11px;
-            font-weight: 700;
-            text-align: center;
-        }
-
-        .workflow-step .step-title { font-size: 12px; font-weight: 600; }
-
-        .workflow-section {
-            scroll-margin-top: 18px;
-            padding: 18px 20px;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-        }
-
-        .workflow-section h2 { font-size: 16px; margin-bottom: 5px; }
-        .workflow-section .section-status { color: var(--text-dim); font-size: 13px; }
-        .workflow-section .section-content { margin-top: 14px; }
-
-        .classification-list {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-            margin-bottom: 14px;
-        }
-
-        .track-row {
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-            padding: 11px 12px;
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-        }
-
-        .track-name { font-weight: 600; font-size: 13px; }
-        .track-details { margin-top: 4px; color: var(--text-dim); font-size: 12px; }
-        .track-class { align-self: start; font-size: 12px; font-weight: 700; }
-        .track-class.alpha { color: var(--alpha-color); }
-        .track-class.electron { color: var(--electron-color); }
-
-        .classification-empty {
-            padding: 12px;
-            margin-bottom: 14px;
-            color: var(--text-dim);
-            border: 1px dashed var(--border);
-            font-size: 13px;
-        }
-
-        @media (max-width: 680px) {
-            .workflow-nav { grid-template-columns: repeat(2, 1fr); }
-            .classification-list { grid-template-columns: 1fr; }
-        }
     </style>
 </head>
 <body>
     <header>
         <div class="logo">&#9883;</div>
         <h1>Cloud Chamber Particle Detector</h1>
-        <div class="subtitle">Otsu Segmentation &bull; Bounding Box Geometry</div>
+        <div class="subtitle">Canny &bull; HoughLinesP &bull; Trajectory Geometry</div>
     </header>
 
     <div class="container">
-        <nav class="workflow-nav" aria-label="Processing workflow">
-            <button class="workflow-step active" data-target="preprocessingSection"><span class="step-number">1</span><span class="step-title">Image Pre-processing</span></button>
-            <button class="workflow-step" data-target="segmentationSection"><span class="step-number">2</span><span class="step-title">Segmentation</span></button>
-            <button class="workflow-step" data-target="classificationSection"><span class="step-number">3</span><span class="step-title">Classification</span></button>
-            <button class="workflow-step" data-target="reportSection"><span class="step-number">4</span><span class="step-title">Report &amp; Analysis</span></button>
-        </nav>
-
         <!-- Upload Zone -->
         <div class="upload-zone" id="uploadZone">
             <div class="icon">&#128194;</div>
@@ -521,115 +307,70 @@
             </div>
         </div>
 
-        <section class="workflow-section" id="preprocessingSection">
-            <h2>Module 1 &mdash; Image Pre-processing</h2>
-            <div class="section-status" id="preprocessingStatus">Upload an image to inspect enhancement stages.</div>
-            <div class="section-content">
-                <div class="stages-panel" id="stagesPanel">
-                    <div class="stages-header">Pre-processing stages</div>
-                    <div class="stages-grid" id="stagesGrid"></div>
-                </div>
-            </div>
-        </section>
-
-        <section class="workflow-section" id="segmentationSection">
-            <h2>Module 2 &mdash; Segmentation</h2>
-            <div class="section-status">Otsu thresholding and morphological cleanup produce the binary particle mask.</div>
-            <div class="section-content" id="segmentationContent"></div>
-        </section>
-
-        <section class="workflow-section" id="classificationSection">
-            <h2>Module 3 &mdash; Classification</h2>
-            <div class="section-status">Bounding-box geometry classifies accepted contours as Alpha or Electron tracks.</div>
-            <div class="section-content">
-                <div class="classification-list" id="classificationList"></div>
-                <!-- Result Display -->
-                <div class="result-area" id="resultArea"></div>
-                <!-- Detections Table -->
-                <div class="detections-panel" id="detectionsPanel">
-                    <div class="panel-header">Detections</div>
-                    <div class="det-table-scroll">
-                        <table class="det-table">
-                            <thead>
-                                <tr>
-                                    <th>Type</th><th>Length (px)</th><th>Length (mm)</th>
-                                    <th>Thickness (px)</th><th>Thickness (mm)</th><th>Density</th><th>Aspect Ratio</th>
-                                </tr>
-                            </thead>
-                            <tbody id="detectionsBody"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section class="workflow-section" id="reportSection">
-            <h2>Module 4 &mdash; Report &amp; Analysis</h2>
-            <div class="section-status">Summary counts and measured track properties appear here after processing.</div>
-            <div class="section-content">
-                <div class="stats" id="statsArea" style="display:none;">
-                    <div class="stat-card"><div class="dot alpha"></div><div><div class="stat-label">Alpha Particles</div><div class="stat-value" id="alphaCount">0</div></div></div>
-                    <div class="stat-card"><div class="dot electron"></div><div><div class="stat-label">Electron Particles</div><div class="stat-value" id="electronCount">0</div></div></div>
-                </div>
-            </div>
-        </section>
-
-    </div>
-
-    <div class="calibration-modal" id="calibrationModal">
-        <div class="calibration-panel">
-            <div class="calibration-header">
+        <!-- Stats Cards -->
+        <div class="stats" id="statsArea" style="display:none;">
+            <div class="stat-card">
+                <div class="dot straight"></div>
                 <div>
-                    <h2>Calibrate chamber perspective</h2>
-                    <div class="calibration-status" id="calibrationStatus">Click the four corners clockwise, starting at top-left.</div>
+                    <div class="stat-label">Straight trajectories</div>
+                    <div class="stat-value" id="straightCount">0</div>
                 </div>
             </div>
-            <div class="calibration-stage">
-                <canvas id="calibrationCanvas"></canvas>
+            <div class="stat-card">
+                <div class="dot curved"></div>
+                <div>
+                    <div class="stat-label">Curved trajectories</div>
+                    <div class="stat-value" id="curvedCount">0</div>
+                </div>
             </div>
-            <div class="calibration-actions">
-                <button type="button" id="calibrationReset">Reset points</button>
-                <button type="button" id="calibrationCancel">Use default crop</button>
-                <button type="button" class="apply" id="calibrationApply" disabled>Apply calibration</button>
+            <div class="stat-card">
+                <div class="dot uncertain"></div>
+                <div>
+                    <div class="stat-label">Uncertain</div>
+                    <div class="stat-value" id="uncertainCount">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Result Display -->
+        <div class="result-area" id="resultArea"></div>
+
+        <!-- Detections Table -->
+        <div class="detections-panel" id="detectionsPanel">
+            <div class="panel-header">Detections</div>
+            <div class="det-table-scroll">
+                <table class="det-table">
+                    <thead>
+                        <tr>
+                            <th>Evidence</th>
+                            <th>Length (px)</th>
+                            <th>Angle (deg)</th>
+                            <th>Straightness</th>
+                            <th>Curvature</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detectionsBody"></tbody>
+                </table>
             </div>
         </div>
     </div>
 
     <script>
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput  = document.getElementById('fileInput');
+        const spinner    = document.getElementById('spinner');
+        const progressContainer = document.getElementById('progressContainer');
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
         const progressPct  = document.getElementById('progressPct');
         const statsArea    = document.getElementById('statsArea');
-        const alphaCount   = document.getElementById('alphaCount');
-        const electronCount = document.getElementById('electronCount');
+        const straightCount = document.getElementById('straightCount');
+        const curvedCount = document.getElementById('curvedCount');
+        const uncertainCount = document.getElementById('uncertainCount');
         const resultArea   = document.getElementById('resultArea');
         const detectionsPanel = document.getElementById('detectionsPanel');
         const detectionsBody  = document.getElementById('detectionsBody');
-        const classificationList = document.getElementById('classificationList');
         const errorMsg = document.getElementById('errorMsg');
-        const stagesPanel = document.getElementById('stagesPanel');
-        const stagesGrid = document.getElementById('stagesGrid');
-        const segmentationContent = document.getElementById('segmentationContent');
-        const preprocessingStatus = document.getElementById('preprocessingStatus');
-        const workflowSteps = document.querySelectorAll('.workflow-step');
-        const calibrationModal = document.getElementById('calibrationModal');
-        const calibrationCanvas = document.getElementById('calibrationCanvas');
-        const calibrationStatus = document.getElementById('calibrationStatus');
-        const calibrationReset = document.getElementById('calibrationReset');
-        const calibrationCancel = document.getElementById('calibrationCancel');
-        const calibrationApply = document.getElementById('calibrationApply');
-        const calibrationContext = calibrationCanvas.getContext('2d');
-        let calibrationPoints = [];
-        let calibrationImage = null;
-        let calibrationResolver = null;
-
-        workflowSteps.forEach((step) => {
-            step.addEventListener('click', () => {
-                workflowSteps.forEach((item) => item.classList.remove('active'));
-                step.classList.add('active');
-                document.getElementById(step.dataset.target).scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
-        });
 
         // --- Drag & Drop ---
         uploadZone.addEventListener('click', () => fileInput.click());
@@ -666,11 +407,6 @@
             resultArea.innerHTML = '';
             detectionsPanel.classList.remove('visible');
             detectionsBody.innerHTML = '';
-            classificationList.innerHTML = '';
-            stagesPanel.classList.remove('visible');
-            stagesGrid.innerHTML = '';
-            segmentationContent.innerHTML = '';
-            preprocessingStatus.textContent = 'Upload an image to inspect enhancement stages.';
             errorMsg.classList.remove('visible');
         }
 
@@ -679,105 +415,12 @@
             errorMsg.classList.add('visible');
         }
 
-        function drawCalibrationPreview() {
-            calibrationContext.drawImage(calibrationImage, 0, 0, calibrationCanvas.width, calibrationCanvas.height);
-            calibrationContext.lineWidth = Math.max(4, calibrationCanvas.width / 250);
-            calibrationContext.strokeStyle = '#58a6ff';
-            calibrationContext.fillStyle = '#f0c000';
-            if (calibrationPoints.length > 1) {
-                calibrationContext.beginPath();
-                calibrationContext.moveTo(calibrationPoints[0][0], calibrationPoints[0][1]);
-                for (const point of calibrationPoints.slice(1)) calibrationContext.lineTo(point[0], point[1]);
-                calibrationContext.stroke();
-            }
-            calibrationPoints.forEach((point, index) => {
-                calibrationContext.beginPath();
-                calibrationContext.arc(point[0], point[1], Math.max(8, calibrationCanvas.width / 100), 0, Math.PI * 2);
-                calibrationContext.fill();
-                calibrationContext.fillStyle = '#07111f';
-                calibrationContext.font = `bold ${Math.max(18, calibrationCanvas.width / 45)}px sans-serif`;
-                calibrationContext.fillText(String(index + 1), point[0] - 6, point[1] + 7);
-                calibrationContext.fillStyle = '#f0c000';
-            });
-        }
-
-        function closeCalibration(points) {
-            calibrationModal.classList.remove('visible');
-            if (calibrationResolver) calibrationResolver(points);
-            calibrationResolver = null;
-            if (calibrationImage && calibrationImage.src && calibrationImage.src.startsWith('blob:')) URL.revokeObjectURL(calibrationImage.src);
-            calibrationImage = null;
-        }
-
-        function requestCalibration(file) {
-            return new Promise((resolve) => {
-                calibrationResolver = resolve;
-                calibrationPoints = [];
-                calibrationApply.disabled = true;
-                calibrationStatus.textContent = 'Click the four corners clockwise, starting at top-left.';
-                const sourceURL = URL.createObjectURL(file);
-                const extension = file.name.split('.').pop().toLowerCase();
-                if (['mp4', 'avi', 'mov', 'mkv'].includes(extension)) {
-                    const video = document.createElement('video');
-                    video.muted = true;
-                    video.playsInline = true;
-                    video.src = sourceURL;
-                    video.addEventListener('loadeddata', () => {
-                        calibrationCanvas.width = video.videoWidth;
-                        calibrationCanvas.height = video.videoHeight;
-                        video.currentTime = 0;
-                    }, { once: true });
-                    video.addEventListener('seeked', () => {
-                        calibrationImage = video;
-                        drawCalibrationPreview();
-                        calibrationModal.classList.add('visible');
-                    }, { once: true });
-                } else {
-                    const image = new Image();
-                    image.onload = () => {
-                        calibrationImage = image;
-                        calibrationCanvas.width = image.naturalWidth;
-                        calibrationCanvas.height = image.naturalHeight;
-                        drawCalibrationPreview();
-                        calibrationModal.classList.add('visible');
-                    };
-                    image.src = sourceURL;
-                }
-            });
-        }
-
-        calibrationCanvas.addEventListener('click', (event) => {
-            if (calibrationPoints.length >= 4) return;
-            const bounds = calibrationCanvas.getBoundingClientRect();
-            calibrationPoints.push([
-                (event.clientX - bounds.left) * calibrationCanvas.width / bounds.width,
-                (event.clientY - bounds.top) * calibrationCanvas.height / bounds.height
-            ]);
-            drawCalibrationPreview();
-            calibrationStatus.textContent = calibrationPoints.length === 4
-                ? 'Four corners selected. Apply calibration or reset the points.'
-                : `Select corner ${calibrationPoints.length + 1} of 4.`;
-            calibrationApply.disabled = calibrationPoints.length !== 4;
-        });
-
-        calibrationReset.addEventListener('click', () => {
-            calibrationPoints = [];
-            calibrationApply.disabled = true;
-            calibrationStatus.textContent = 'Click the four corners clockwise, starting at top-left.';
-            drawCalibrationPreview();
-        });
-        calibrationCancel.addEventListener('click', () => closeCalibration([]));
-        calibrationApply.addEventListener('click', () => closeCalibration(calibrationPoints));
-
         // --- Handle file upload ---
         async function handleFile(file) {
             resetUI();
 
             const ext = file.name.split('.').pop().toLowerCase();
             const isVideo = ['mp4', 'avi', 'mov', 'mkv'].includes(ext);
-
-            const selectedPoints = await requestCalibration(file);
-            if (selectedPoints === null) return;
 
             if (isVideo) {
                 spinner.classList.remove('visible');
@@ -792,9 +435,6 @@
             // Upload
             const formData = new FormData();
             formData.append('file', file);
-            if (selectedPoints && selectedPoints.length === 4) {
-                formData.append('calibration', JSON.stringify(selectedPoints));
-            }
 
             let resp;
             try {
@@ -828,8 +468,9 @@
         // --- Show image result ---
         function showImageResult(data) {
             // Stats
-            alphaCount.textContent = data.summary.Alpha;
-            electronCount.textContent = data.summary.Electron;
+            straightCount.textContent = data.summary['Straight trajectory'];
+            curvedCount.textContent = data.summary['Curved trajectory'];
+            uncertainCount.textContent = data.summary.Uncertain;
             statsArea.style.display = 'grid';
 
             // Image
@@ -841,55 +482,16 @@
 
             // Detections table
             if (data.detections && data.detections.length > 0) {
-                showClassificationList(data.detections);
                 showDetectionsTable(data.detections);
-            } else {
-                classificationList.innerHTML = '<div class="classification-empty">No accepted particle tracks were found.</div>';
             }
-            if (data.stages && data.stages.length > 0) {
-                showProcessingStages(data.stages);
-                preprocessingStatus.textContent = 'Completed: inspect each enhancement and segmentation result below.';
-            }
-        }
-
-        function showClassificationList(detections) {
-            classificationList.innerHTML = '';
-            detections.forEach((d, index) => {
-                const row = document.createElement('div');
-                const className = d.type === 'Alpha' ? 'alpha' : 'electron';
-                row.className = 'track-row';
-                row.innerHTML = `
-                    <div>
-                        <div class="track-name">Track ${index + 1}</div>
-                        <div class="track-details">${d.length_px}px / ${d.length_mm}mm long &bull; ${d.thickness_px}px thick &bull; AR ${d.ar}</div>
-                    </div>
-                    <div class="track-class ${className}">${d.type}</div>
-                `;
-                classificationList.appendChild(row);
-            });
-        }
-
-        function showProcessingStages(stages) {
-            stagesGrid.innerHTML = '';
-            segmentationContent.innerHTML = '';
-            stages.forEach((stage, index) => {
-                const figure = document.createElement('figure');
-                figure.className = 'stage-card';
-                figure.innerHTML = `<img src="${stage.url}" alt="${stage.name}"><figcaption>${index + 1}. ${stage.name}</figcaption>`;
-                stagesGrid.appendChild(figure);
-                if (stage.name === 'Otsu threshold' || stage.name === 'Morphological cleanup' || stage.name === 'Final binary mask') {
-                    const segmentationFigure = figure.cloneNode(true);
-                    segmentationContent.appendChild(segmentationFigure);
-                }
-            });
-            stagesPanel.classList.add('visible');
         }
 
         // --- Show video result ---
         function showVideoResult(data) {
             // Stats
-            alphaCount.textContent = data.summary.Alpha;
-            electronCount.textContent = data.summary.Electron;
+            straightCount.textContent = data.summary['Straight trajectory'];
+            curvedCount.textContent = data.summary['Curved trajectory'];
+            uncertainCount.textContent = data.summary.Uncertain;
             statsArea.style.display = 'grid';
 
             // Video player
@@ -909,15 +511,13 @@
             detectionsBody.innerHTML = '';
             for (const d of detections) {
                 const tr = document.createElement('tr');
-                const cls = d.type === 'Alpha' ? 'alpha' : 'electron';
+                const cls = d.evidence === 'Straight trajectory' ? 'straight' : (d.evidence === 'Curved trajectory' ? 'curved' : 'uncertain');
                 tr.innerHTML = `
-                    <td><span class="badge ${cls}">${d.type}</span></td>
-                    <td>${d.length_px}</td>
-                    <td>${d.length_mm}</td>
-                    <td>${d.thickness_px}</td>
-                    <td>${d.thickness_mm}</td>
-                    <td>${d.density}</td>
-                    <td>${d.ar}</td>
+                    <td><span class="badge ${cls}">${d.evidence}</span></td>
+                    <td>${d.length}</td>
+                    <td>${d.orientation_angle}</td>
+                    <td>${d.straightness}</td>
+                    <td>${d.curvature}</td>
                 `;
                 detectionsBody.appendChild(tr);
             }

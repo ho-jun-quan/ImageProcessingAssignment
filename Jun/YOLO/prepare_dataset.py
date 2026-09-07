@@ -179,11 +179,11 @@ def prepare(verbose=True):
         # on. Enhance it with the SAME pipeline used at inference time so the
         # training and video domains match.
         clean = remove_red_annotations(image)
-        clean = preprocessing.preprocess_for_yolo(clean)
+        clean = preprocessing.enhance_frame(clean)
 
         split = "val" if key in val_keys else "train"
         stem = os.path.splitext(os.path.basename(src))[0]
-        img_out = os.path.join(config.DATASET_DIR, "images", split, stem + ".png")
+        img_out = os.path.join(config.DATASET_DIR, "images", split, stem + ".jpg")
         lbl_out = os.path.join(config.DATASET_DIR, "labels", split, stem + ".txt")
 
         cv2.imwrite(img_out, clean)

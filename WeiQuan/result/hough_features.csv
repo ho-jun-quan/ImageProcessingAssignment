@@ -1,0 +1,7 @@
+image_name,roi_x,roi_y,roi_width,roi_height,segment_count,total_length_px,average_orientation,average_angle_change,curvature_rad_per_px,straightness,trajectory_pattern,rule_based_classification
+awan1.jpg,54,87,972,1578,,,,,0.00264354,0.9565,,
+awan13.jpg,54,89,972,1602,,,,,0.00815734,0.4393,,
+awan21.jpg,54,89,972,1613,,,,,0.00796643,0.9307,,
+awan22.jpg,103,80,921,752,,,,,0.00600659,0.018389,,
+bw2.jpg,54,96,972,1728,,,,,0.0033807,0.9971,,
+bw5.jpg,265,287,714,710,2514,364074.432461,140.30043,42.34118,0.002775061,0.001739,Straight trajectory,Electron-like

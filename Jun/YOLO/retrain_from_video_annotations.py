@@ -104,8 +104,8 @@ def parse_cvat_annotations(xml_path):
     return annotations
 
 
-def export_training_frames(video_path, annotations, output_dir, frames_per_second=None, skip_existing=True):
-    """Write every selected annotated video frame with matching YOLO labels."""
+def export_training_frames(video_path, annotations, output_dir, frames_per_second=1, skip_existing=True):
+    """Sample frames from the video and write the matching YOLO label files."""
     os.makedirs(output_dir, exist_ok=True)
     images_dir = os.path.join(output_dir, 'images')
     labels_dir = os.path.join(output_dir, 'labels')
@@ -117,24 +117,21 @@ def export_training_frames(video_path, annotations, output_dir, frames_per_secon
     if not cap.isOpened():
         raise RuntimeError(f'Could not open video: {video_path}')
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    sample_stride = max(1, int(round(fps / max(frames_per_second, 1))))
 
     frame_to_annotations = {}
     for ann in annotations:
         frame_to_annotations.setdefault(int(ann['frame']), []).append(ann)
 
-    annotated_frames = sorted(frame_to_annotations.keys())
-    if frames_per_second and frames_per_second > 0:
-        sample_stride = max(1, int(round(fps / frames_per_second)))
-        sampled_frames = [
-            frame_idx for frame_idx in annotated_frames
-            if frame_idx % sample_stride == 0
-        ]
-    else:
-        sampled_frames = annotated_frames
-
     rng = random.Random(42)
-    sampled_frames = sampled_frames.copy()
+    sampled_frames = []
+    annotated_frames = sorted(frame_to_annotations.keys())
+    for frame_idx in annotated_frames:
+        if frame_idx % sample_stride == 0:
+            sampled_frames.append(frame_idx)
+
     rng.shuffle(sampled_frames)
     n_val = max(1, int(round(len(sampled_frames) * 0.2)))
     val_frames = set(sampled_frames[:n_val])
@@ -142,16 +139,14 @@ def export_training_frames(video_path, annotations, output_dir, frames_per_secon
     saved = 0
     class_counts = {i: 0 for i in range(config.NUM_CLASSES)}
     for frame_idx in sampled_frames:
-        # The frame list is shuffled for a reproducible split, so sequential
-        # cap.read() would associate annotations with the wrong video frame.
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+
         ok, frame = cap.read()
         if not ok:
             continue
 
         split = 'val' if frame_idx in val_frames else 'train'
         stem = f'frame_{frame_idx:06d}'
-        image_path = os.path.join(images_dir, split, f'{stem}.png')
+        image_path = os.path.join(images_dir, split, f'{stem}.jpg')
         label_path = os.path.join(labels_dir, split, f'{stem}.txt')
 
         if skip_existing and os.path.isfile(image_path):
@@ -175,7 +170,7 @@ def export_training_frames(video_path, annotations, output_dir, frames_per_secon
         if not lines:
             continue
 
-        processed = preprocessing.preprocess_for_yolo(frame)
+        processed = preprocessing.enhance_frame(frame)
         cv2.imwrite(image_path, processed)
         with open(label_path, 'w') as f:
             f.write('\n'.join(lines) + '\n')
@@ -198,7 +193,7 @@ def write_data_yaml(dataset_dir):
         yaml.safe_dump(data, f, sort_keys=False)
 
 
-def prepare_video_dataset(video_path, xml_path, dataset_dir, frames_per_second=None):
+def prepare_video_dataset(video_path, xml_path, dataset_dir, frames_per_second=1):
     """Generate a YOLO dataset based on the video + CVAT XML annotations."""
     if os.path.isdir(dataset_dir):
         shutil.rmtree(dataset_dir)
@@ -230,7 +225,7 @@ if __name__ == '__main__':
     parser.add_argument('--video', default=config.VIDEO_SOURCE, help='Video file to sample frames from.')
     parser.add_argument('--xml', default=config.VIDEO_ANNOTATIONS_XML, help='CVAT annotation XML file.')
     parser.add_argument('--output', default=os.path.join(config.DATASET_DIR, 'video_annotations_dataset'), help='Output dataset directory.')
-    parser.add_argument('--fps', type=int, default=None, help='Optional sampling rate; default exports every annotated frame.')
+    parser.add_argument('--fps', type=int, default=1, help='Sample at this many frames per second to generate training frames.')
     args = parser.parse_args()
 
     prepare_video_dataset(args.video, args.xml, args.output, frames_per_second=args.fps)
