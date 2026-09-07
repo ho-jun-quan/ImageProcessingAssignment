@@ -105,29 +105,10 @@ def _export_best_weights(model):
     trainer = getattr(model, "trainer", None)
     best = getattr(trainer, "best", None) if trainer else None
     if best and os.path.isfile(best):
-        import shutil
-
         os.makedirs(os.path.dirname(config.BEST_WEIGHTS), exist_ok=True)
-        source = os.path.realpath(os.fspath(best))
-        destination = os.path.realpath(config.BEST_WEIGHTS)
-        same_checkpoint = os.path.normcase(source) == os.path.normcase(destination)
-        if not same_checkpoint and os.path.isfile(destination):
-            try:
-                same_checkpoint = os.path.samefile(source, destination)
-            except OSError:
-                pass
-
-        if not same_checkpoint:
-            try:
-                shutil.copy2(source, destination)
-            except PermissionError as exc:
-                if getattr(exc, "winerror", None) != 32:
-                    raise
-                print(
-                    "[warn] Could not replace config.BEST_WEIGHTS because it is "
-                    "locked by another process. The current checkpoint remains at: "
-                    f"{source}"
-                )
+        if os.path.abspath(best) != os.path.abspath(config.BEST_WEIGHTS):
+            import shutil
+            shutil.copy2(best, config.BEST_WEIGHTS)
         print(f"Best weights available at: {config.BEST_WEIGHTS}")
 
 

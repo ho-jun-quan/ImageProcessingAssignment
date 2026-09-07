@@ -8,7 +8,7 @@ inference, so the model never sees a different image domain at test time
 on the video").
 
 The single entry point is `enhance_frame()`; it returns a three-channel,
-Otsu-binarised image ready for YOLO.
+morphology-cleaned image ready for YOLO.
 """
 
 import cv2
@@ -28,29 +28,37 @@ def _to_grayscale(image):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
-def apply_dog_high_pass(image):
-    """Apply a Difference of Gaussians high-pass filter to reveal local tracks."""
+def apply_morphology(image):
+    """Remove isolated specks and retain bright, connected particle tracks."""
     if image is None or image.size == 0:
         return image
     gray = _to_grayscale(image)
 
-    small_blur = cv2.GaussianBlur(
-        gray, (0, 0), config.DOG_SIGMA_SMALL
+    background_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, config.MORPH_BACKGROUND_KERNEL
     )
-    large_blur = cv2.GaussianBlur(
-        gray, (0, 0), config.DOG_SIGMA_LARGE
+    clean_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, config.MORPH_CLEAN_KERNEL
     )
-    dog = cv2.subtract(small_blur, large_blur)
-    return cv2.normalize(dog, None, 0, 255, cv2.NORM_MINMAX)
 
+    denoised = cv2.medianBlur(gray, 3)
+    bright_tracks = cv2.morphologyEx(
+        denoised, cv2.MORPH_TOPHAT, background_kernel
+    )
+    _, binary = cv2.threshold(
+        bright_tracks, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, clean_kernel)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, clean_kernel)
 
-def apply_otsu_binarisation(image):
-    """Convert the high-pass response into a binary track mask using Otsu's method."""
-    if image is None or image.size == 0:
-        return image
-    gray = _to_grayscale(image)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    cleaned = np.zeros_like(binary)
+    for component_id in range(1, component_count):
+        area = stats[component_id, cv2.CC_STAT_AREA]
+        if area >= config.MORPH_MIN_COMPONENT_AREA:
+            cleaned[labels == component_id] = 255
+
+    return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
 
 
 def apply_denoise(image):
@@ -58,7 +66,7 @@ def apply_denoise(image):
     if image is None or image.size == 0:
         return image
     gray = _to_grayscale(image)
-    denoised = cv2.fastNlMeansDenoising(gray, None, h=20, templateWindowSize=7, searchWindowSize=21)
+    denoised = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=7, searchWindowSize=21)
     return cv2.cvtColor(denoised, cv2.COLOR_GRAY2BGR)
 
 
@@ -74,10 +82,4 @@ def enhance_frame(image):
     if config.USE_DENOISING:
         out = apply_denoise(out)
 
-    out = apply_dog_high_pass(out)
-    return apply_otsu_binarisation(out)
-
-
-def preprocess_for_yolo(image):
-    """Return the exact image representation used by both YOLO training and inference."""
-    return enhance_frame(image)
+    return apply_morphology(out)
