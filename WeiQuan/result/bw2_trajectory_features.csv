@@ -1,4 +1,0 @@
-image_name,trajectory_id,segment_count,trajectory_length_px,orientation_angle_deg,straightness,curvature_rad_per_px,average_angle_change_deg,trajectory_evidence
-bw2.jpg,1,4,182.0669387176721,124.70048885590548,0.9971002331675266,0.003380704043829522,11.887975896889705,Uncertain
-bw2.jpg,2,1,36.0,0.0,1.0,0.0,0.0,Uncertain
-bw2.jpg,3,1,35.73513677041127,107.92791976200722,1.0,0.0,0.0,Uncertain
