@@ -86,6 +86,19 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 # Default video I/O for inference
 VIDEO_INPUT = VIDEO_SOURCE
 VIDEO_OUTPUT = os.path.join(BASE_DIR, "output_yolo.mp4")
+VIDEO_FRAMES_OUTPUT_DIR = os.path.join(BASE_DIR, "output_video_frames")
+
+# =============================================================================
+# Cloud-Chamber Spatial Calibration
+# =============================================================================
+# Portrait frames represent a chamber measuring 125 mm high by 80 mm wide.
+# Normalized margins allow borders outside the chamber to be excluded without
+# changing the calibration when the source resolution changes.
+CHAMBER_HEIGHT_MM = 125.0
+CHAMBER_WIDTH_MM = 80.0
+CHAMBER_ROI_X = (0.0, 1.0)
+CHAMBER_ROI_Y = (0.0, 1.0)
+FILTER_DETECTIONS_TO_CHAMBER = True
 
 # =============================================================================
 # Red-Box Annotation Detection
@@ -107,14 +120,14 @@ BOX_INSET = 6
 # =============================================================================
 # Frame Pre-processing  (shared by dataset build AND inference)
 # =============================================================================
-# Morphology-based enhancement improves visibility of bright particle tracks
-# on a dark background without adaptive histogram equalisation.
+# Fast denoising, Difference of Gaussians high-pass filtering, and Otsu
+# binarisation improve bright particle tracks on a dark background.
 USE_DENOISING = True
 
-# Morphology settings for bright particle tracks on a dark background.
-MORPH_BACKGROUND_KERNEL = (15, 15)
-MORPH_CLEAN_KERNEL = (3, 3)
-MORPH_MIN_COMPONENT_AREA = 6
+# Difference of Gaussians settings. The smaller blur removes fine detail from
+# the larger blur, leaving local track structure and suppressing slow background variation.
+DOG_SIGMA_SMALL = 1.0
+DOG_SIGMA_LARGE = 3.0
 
 # =============================================================================
 # Dataset Split
@@ -140,7 +153,7 @@ SEED = 42
 # =============================================================================
 # Low confidence favours recall (catching faint tracks). Detections can be
 # filtered higher afterwards; missed tracks can never be recovered.
-CONF_THRESHOLD = 0.10
+CONF_THRESHOLD = 0.60
 IOU_THRESHOLD = 0.45
 VIDEO_CODEC = "mp4v"
 

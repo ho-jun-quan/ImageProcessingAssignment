@@ -10,8 +10,8 @@ Provides:
 
 Recall-oriented tricks (all toggled in config) help catch the faint tracks that
 whole-frame, high-confidence inference misses:
-    * morphology-based binary enhancement (identical to the dataset-build step)
-    * median denoising, top-hat background subtraction, opening, and closing
+        * fast denoising, Difference of Gaussians high-pass filtering, and Otsu
+            binarisation (identical to the dataset-build step)
   * test-time augmentation (multi-scale + flips)
   * tiled / SAHI-style inference with class-wise NMS merging
   * a low default confidence threshold
@@ -46,13 +46,18 @@ def load_model(weights=None):
     return YOLO(weights)
 
 
-def _draw_detections(frame, boxes_xyxy, class_ids, confs):
+def _draw_detections(frame, boxes_xyxy, class_ids, confs, lengths_mm=None):
     """Draw class-coloured boxes + labels onto a BGR frame (in place copy)."""
     out = frame.copy()
-    for (x1, y1, x2, y2), cls_id, conf in zip(boxes_xyxy, class_ids, confs):
+    lengths_mm = lengths_mm or [None] * len(boxes_xyxy)
+    for (x1, y1, x2, y2), cls_id, conf, length_mm in zip(
+        boxes_xyxy, class_ids, confs, lengths_mm
+    ):
         cls_id = int(cls_id)
         color = config.CLASS_COLORS.get(cls_id, (255, 255, 255))
         label = f"{config.DISPLAY_NAMES.get(cls_id, cls_id)} {conf:.2f}"
+        if length_mm is not None:
+            label += f" {length_mm:.1f} mm"
 
         cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -97,11 +102,51 @@ def _list_image_files(input_path):
     return []
 
 
+def _calibrate_detections(boxes_xyxy, class_ids, confs, image_shape):
+    """Keep detections inside the calibrated chamber and estimate bbox lengths."""
+    height, width = image_shape[:2]
+    x_min = config.CHAMBER_ROI_X[0] * width
+    x_max = config.CHAMBER_ROI_X[1] * width
+    y_min = config.CHAMBER_ROI_Y[0] * height
+    y_max = config.CHAMBER_ROI_Y[1] * height
+    mm_per_pixel_x = config.CHAMBER_WIDTH_MM / (x_max - x_min)
+    mm_per_pixel_y = config.CHAMBER_HEIGHT_MM / (y_max - y_min)
+
+    filtered_boxes = []
+    filtered_classes = []
+    filtered_confs = []
+    lengths_mm = []
+    for box, class_id, confidence in zip(boxes_xyxy, class_ids, confs):
+        x1, y1, x2, y2 = (float(value) for value in box)
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+        if config.FILTER_DETECTIONS_TO_CHAMBER and not (
+            x_min <= center_x <= x_max and y_min <= center_y <= y_max
+        ):
+            continue
+
+        x1 = max(x_min, min(x1, x_max))
+        y1 = max(y_min, min(y1, y_max))
+        x2 = max(x_min, min(x2, x_max))
+        y2 = max(y_min, min(y2, y_max))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        width_mm = (x2 - x1) * mm_per_pixel_x
+        height_mm = (y2 - y1) * mm_per_pixel_y
+        filtered_boxes.append([x1, y1, x2, y2])
+        filtered_classes.append(class_id)
+        filtered_confs.append(confidence)
+        lengths_mm.append(float(np.hypot(width_mm, height_mm)))
+
+    return filtered_boxes, filtered_classes, filtered_confs, lengths_mm
+
+
 def detect_image(model, image, conf=None, iou=None, use_tiling=None, use_tta=None):
     """
     Run detection on a single BGR image (path or array).
 
-    Applies the shared morphology-based enhancement first, then either whole-frame or
+    Applies the shared denoising, DoG high-pass, and Otsu enhancement first, then either whole-frame or
     tiled inference (config.USE_TILING). Returns (annotated_image, detections)
     where detections is a list of dicts:
     {class_id, class_name, confidence, bbox=(x1,y1,x2,y2)}.
@@ -117,7 +162,7 @@ def detect_image(model, image, conf=None, iou=None, use_tiling=None, use_tta=Non
         raise ValueError("Could not read the input image.")
 
     # Same enhancement as the training data so the domains match.
-    enhanced = preprocessing.enhance_frame(image)
+    enhanced = preprocessing.preprocess_for_yolo(image)
 
     if use_tiling:
         boxes_xyxy, class_ids, confs = _detect_tiled(
@@ -128,18 +173,25 @@ def detect_image(model, image, conf=None, iou=None, use_tiling=None, use_tta=Non
             model, enhanced, conf, iou, use_tta
         )
 
+    boxes_xyxy, class_ids, confs, lengths_mm = _calibrate_detections(
+        boxes_xyxy, class_ids, confs, enhanced.shape
+    )
+
     detections = []
-    for xyxy, cls_id, c in zip(boxes_xyxy, class_ids, confs):
+    for xyxy, cls_id, c, length_mm in zip(
+        boxes_xyxy, class_ids, confs, lengths_mm
+    ):
         cls_id = int(cls_id)
         detections.append({
             "class_id": cls_id,
             "class_name": config.CLASS_NAMES[cls_id] if cls_id < config.NUM_CLASSES else str(cls_id),
             "confidence": float(c),
             "bbox": tuple(int(v) for v in xyxy),
+            "length_mm": length_mm,
         })
 
     # Draw on the ENHANCED frame so the overlay matches what the model saw.
-    annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs)
+    annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs, lengths_mm)
     return annotated, detections
 
 
@@ -153,7 +205,7 @@ def process_image(model, input_path, output_path=None, conf=None,
     if image is None:
         raise ValueError(f"Could not read image: {input_path}")
 
-    enhanced = preprocessing.enhance_frame(image)
+    enhanced = preprocessing.preprocess_for_yolo(image)
     if use_tiling is None:
         use_tiling = config.USE_TILING
     if use_tta is None:
@@ -173,18 +225,27 @@ def process_image(model, input_path, output_path=None, conf=None,
             use_tta,
         )
 
+    boxes_xyxy, class_ids, confs, lengths_mm = _calibrate_detections(
+        boxes_xyxy, class_ids, confs, enhanced.shape
+    )
+
     detections = []
-    for xyxy, cls_id, c in zip(boxes_xyxy, class_ids, confs):
+    for xyxy, cls_id, c, length_mm in zip(
+        boxes_xyxy, class_ids, confs, lengths_mm
+    ):
         cls_id = int(cls_id)
         detections.append({
             "class_id": cls_id,
             "class_name": config.CLASS_NAMES[cls_id] if cls_id < config.NUM_CLASSES else str(cls_id),
             "confidence": float(c),
             "bbox": tuple(int(v) for v in xyxy),
+            "length_mm": length_mm,
         })
 
-    annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs)
-    annotated_unprocessed = _draw_detections(image, boxes_xyxy, class_ids, confs)
+    annotated = _draw_detections(enhanced, boxes_xyxy, class_ids, confs, lengths_mm)
+    annotated_unprocessed = _draw_detections(
+        image, boxes_xyxy, class_ids, confs, lengths_mm
+    )
 
     if output_path is None:
         output_dir = config.IMAGE_OUTPUT_DIR
@@ -352,16 +413,19 @@ def _suppress_cross_class_duplicates(boxes, class_ids, confs):
 
 def process_video(model, input_path=None, output_path=None, conf=None,
                   iou=None, max_frames=None, progress_every=100,
-                  use_tiling=None, use_tta=None):
+                  use_tiling=None, use_tta=None, frames_output_dir=None):
     """
     Detect particle tracks in every frame of a video and write an annotated
-    output video. Returns a stats dict (frame/detection counts per class).
+    output video and optionally save each annotated frame as a PNG. Returns a
+    stats dict (frame/detection counts per class).
 
     Tiling + TTA greatly improve recall but are slow per frame (especially on
     CPU); pass use_tiling=False / use_tta=False for a fast preview.
     """
     input_path = input_path or config.VIDEO_INPUT
     output_path = output_path or config.VIDEO_OUTPUT
+    if frames_output_dir:
+        os.makedirs(frames_output_dir, exist_ok=True)
     conf = conf if conf is not None else config.CONF_THRESHOLD
     iou = iou if iou is not None else config.IOU_THRESHOLD
 
@@ -404,6 +468,11 @@ def process_video(model, input_path=None, output_path=None, conf=None,
             total_dets += 1
 
         writer.write(annotated)
+        if frames_output_dir:
+            frame_path = os.path.join(
+                frames_output_dir, f"frame_{frame_idx:06d}.png"
+            )
+            cv2.imwrite(frame_path, annotated)
 
         if progress_every and frame_idx % progress_every == 0:
             pct = 100.0 * frame_idx / total if total else 0.0
@@ -430,6 +499,7 @@ def process_video(model, input_path=None, output_path=None, conf=None,
         "total_detections": total_dets,
         "class_counts": class_counts,
         "output_path": output_path,
+        "frames_output_dir": frames_output_dir,
     }
 
 
@@ -439,14 +509,22 @@ if __name__ == "__main__":
     parser.add_argument("--images-dir", type=str, default=None, help="Directory of input images")
     parser.add_argument("--video", type=str, default=None, help="Single input video path")
     parser.add_argument("--output", type=str, default=None, help="Output path for a single image/video")
+    parser.add_argument("--conf", type=float, default=None,
+                        help="Minimum detection confidence from 0 to 1")
+    parser.add_argument("--frames-dir", type=str, default=None,
+                        help="Directory for individual annotated video frames")
     args = parser.parse_args()
+
+    if args.conf is not None and not 0.0 <= args.conf <= 1.0:
+        parser.error("--conf must be between 0 and 1")
 
     model = load_model()
 
     if args.image:
-        process_image(model, args.image, output_path=args.output)
+        process_image(model, args.image, output_path=args.output, conf=args.conf)
     elif args.images_dir:
-        process_images(model, input_dir=args.images_dir, output_dir=args.output)
+        process_images(model, input_dir=args.images_dir, output_dir=args.output, conf=args.conf)
     else:
         process_video(model, input_path=args.video or config.VIDEO_INPUT,
-                      output_path=args.output or config.VIDEO_OUTPUT)
+                      output_path=args.output or config.VIDEO_OUTPUT,
+                      conf=args.conf, frames_output_dir=args.frames_dir)

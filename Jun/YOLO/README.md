@@ -33,13 +33,21 @@ each labelled track. `prepare_dataset.py`:
 | file | purpose |
 |------|---------|
 | `config.py` | classes, paths, red-box params, hyper-parameters, label map |
-| `preprocessing.py` | shared morphology-based frame enhancement (dataset build + inference) |
+| `preprocessing.py` | shared denoising, DoG high-pass, and Otsu preprocessing (dataset build + inference) |
 | `prepare_dataset.py` | red-box images → YOLO dataset (inpaint + enhance) |
 | `train.py` | fine-tune YOLO11n on the dataset |
-| `inference.py` | detect on images / annotate a video (morphology + TTA + tiling) |
+| `inference.py` | detect on images / annotate a video (DoG + Otsu + TTA + tiling) |
 | `extract_frames.py` | sample frames from the videos to expand the dataset |
 | `cloud_chamber_yolo.ipynb` | end-to-end notebook (prep → train → infer → improve) |
 | `requirements.txt` | Python dependencies |
+
+## Spatial calibration
+
+The detector assumes each portrait image/frame represents the full 125 mm high by
+80 mm wide cloud chamber. Inference filters detections to the configured normalized
+chamber ROI and adds a rough bounding-box diagonal length in millimetres to each
+detection. Adjust `CHAMBER_ROI_X` and `CHAMBER_ROI_Y` in `config.py` if a source
+contains a border outside the chamber.
 
 ## Running
 
@@ -79,9 +87,9 @@ video. Two kinds of fix are provided:
 
 **Inference-time (no retraining, all toggled in `config.py`):**
 
-- **Morphology enhancement** (`preprocessing.py`) — median denoising, white
-  top-hat background subtraction, thresholding, opening, closing, and connected
-  component filtering are applied identically to training and inference frames.
+- **Shared preprocessing** (`preprocessing.py`) — fast non-local-means denoising,
+  Difference of Gaussians high-pass filtering, and Otsu binarisation are applied
+  identically to training and inference frames.
 - **Low confidence** (`CONF_THRESHOLD = 0.10`) — favours recall.
 - **Test-time augmentation** (`USE_TTA`) — multi-scale + flips.
 - **Tiled / SAHI-style inference** (`USE_TILING`, `TILE_ROWS/COLS/OVERLAP`) —

@@ -1,0 +1,846 @@
+"""
+BMDS2133 Image Processing - Cloud Chamber Particle Track Classification
+========================================================================
+Topic: Cloud Chamber Particle Track Classification (Topic 4)
+Core Technique: Multiscale Curvilinear Filter (Hessian Matrix Scale-Space / Frangi Vesselness)
+
+High-Precision Particle Track Analysis System
+----------------------------------------------
+Enhanced Detection Capabilities:
+1. Multiscale Hessian Curvilinear Filter spanning scales (1.2, 2.0, 3.2, 5.0 px) to
+   capture thin, curling Electron tracks and dense, plasma-thick Alpha trails.
+2. Edge-preserving Bilateral Filter and Morphological Top-Hat illumination levelling.
+3. Automated camera status-bar / OSD text suppression to prevent timestamp false detections.
+4. Morphological skeleton centerline extraction and Euclidean Distance Transform (EDT) width profiling.
+5. Calibrated geometric feature extraction:
+   - Track Length (cm)
+   - Track Width / Thickness (mm)
+   - Curvature and Tortuosity
+6. Course-compliant Physical Classification:
+   - Alpha Particle: Thick (>= 1.4 mm), short (<= 6.5 cm), straight -> Yellow Bounding Box.
+   - Electron Particle: Thin (< 1.4 mm) or curved/circular in magnetic field -> Red Bounding Box.
+7. Automated export of classified imagery, 4-panel diagnostic figures, CSV metrics,
+   batch analysis dashboards, and markdown reports into the 'result/' folder.
+
+Usage:
+------
+python code/first.py
+"""
+
+import os
+import sys
+import math
+import time
+import csv
+from pathlib import Path
+from typing import Tuple, List, Dict, Sequence, Optional, Any
+
+import numpy as np
+import cv2
+
+# Optional imports for plotting if installed
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
+
+# =============================================================================
+# 1. CURVILINEAR FILTER ENGINE (HESSIAN EIGENVALUES & FRANGI VESSELNESS)
+# =============================================================================
+
+def compute_gaussian_derivatives_2d(
+    image: np.ndarray,
+    sigma: float
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute 2nd-order spatial Gaussian derivatives (I_xx, I_yy, I_xy) at scale sigma
+    using scale-space theory with gamma-normalisation (Lindberg scale normalization).
+    """
+    radius = max(1, int(round(3.0 * sigma)))
+    x = np.arange(-radius, radius + 1, dtype=np.float32)
+
+    var = sigma * sigma
+    g = np.exp(-0.5 * (x ** 2) / var)
+    g /= np.sum(g)
+
+    dg = -x / var * g
+    d2g = (x ** 2 - var) / (var ** 2) * g
+
+    I_xx = cv2.sepFilter2D(image, cv2.CV_32F, d2g, g)
+    I_yy = cv2.sepFilter2D(image, cv2.CV_32F, g, d2g)
+    I_xy = cv2.sepFilter2D(image, cv2.CV_32F, dg, dg)
+
+    scale_factor = sigma * sigma
+    I_xx *= scale_factor
+    I_yy *= scale_factor
+    I_xy *= scale_factor
+
+    return I_xx, I_yy, I_xy
+
+
+def compute_hessian_eigenvalues_2d(
+    I_xx: np.ndarray,
+    I_yy: np.ndarray,
+    I_xy: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Analytically compute eigenvalues (lambda_1, lambda_2) of 2x2 symmetric Hessian
+    at each pixel, ordered such that |lambda_1| <= |lambda_2|.
+    """
+    trace = I_xx + I_yy
+    diff = I_xx - I_yy
+    discriminant = np.sqrt(np.maximum(diff * diff + 4.0 * (I_xy * I_xy), 0.0))
+
+    mu_1 = 0.5 * (trace + discriminant)
+    mu_2 = 0.5 * (trace - discriminant)
+
+    abs_mu1 = np.abs(mu_1)
+    abs_mu2 = np.abs(mu_2)
+
+    swap = abs_mu1 > abs_mu2
+    lambda_1 = np.where(swap, mu_2, mu_1)
+    lambda_2 = np.where(swap, mu_1, mu_2)
+
+    return lambda_1, lambda_2
+
+
+def apply_curvilinear_filter(
+    image: np.ndarray,
+    sigmas: Sequence[float] = (1.2, 2.0, 3.2, 5.0),
+    beta: float = 0.5
+) -> np.ndarray:
+    """
+    Multiscale Curvilinear (Frangi Vesselness) Filter.
+    Accentuates bright particle tracks on dark background across multiple
+    spatial scales while suppressing isotropic blobs and background mist.
+    """
+    img = image.astype(np.float32)
+    if img.max() > 1.0:
+        img /= 255.0
+
+    max_response = np.zeros_like(img, dtype=np.float32)
+    two_beta_sq = 2.0 * (beta ** 2)
+
+    for sigma in sigmas:
+        I_xx, I_yy, I_xy = compute_gaussian_derivatives_2d(img, sigma)
+        lambda_1, lambda_2 = compute_hessian_eigenvalues_2d(I_xx, I_yy, I_xy)
+
+        # Bright tracks on dark background require negative curvature across the ridge (lambda_2 < 0)
+        valid_mask = lambda_2 < 0
+        safe_lambda_2 = np.where(np.abs(lambda_2) < 1e-10, 1e-10, lambda_2)
+
+        # Blobness measure R_B = |lambda_1| / |lambda_2|
+        r_b = np.abs(lambda_1) / np.abs(safe_lambda_2)
+
+        # Second-order structureness S = sqrt(lambda_1^2 + lambda_2^2)
+        s = np.sqrt(lambda_1 ** 2 + lambda_2 ** 2)
+
+        s_val = s[valid_mask]
+        c_scale = 0.5 * np.max(s_val) if s_val.size > 0 and np.max(s_val) > 0 else 1.0
+        two_c_sq = 2.0 * (c_scale ** 2) if c_scale > 0 else 1.0
+
+        term_rb = np.exp(-(r_b ** 2) / two_beta_sq)
+        term_s = 1.0 - np.exp(-(s ** 2) / two_c_sq)
+        scale_response = np.where(valid_mask, term_rb * term_s, 0.0)
+
+        max_response = np.maximum(max_response, scale_response)
+
+    res_max = np.max(max_response)
+    if res_max > 1e-7:
+        max_response /= res_max
+
+    return max_response
+
+
+# =============================================================================
+# 2. SPATIAL CALIBRATOR (PIXEL TO PHYSICAL UNITS)
+# =============================================================================
+
+class SpatialCalibrator:
+    """Converts pixel measurements to real physical metrics (cm, mm)."""
+    def __init__(self, pixels_per_cm: float = 40.0):
+        self.pixels_per_cm = max(1e-3, float(pixels_per_cm))
+        self.pixels_per_mm = self.pixels_per_cm / 10.0
+
+    def px_to_cm(self, px: float) -> float:
+        return px / self.pixels_per_cm
+
+    def px_to_mm(self, px: float) -> float:
+        return px / self.pixels_per_mm
+
+
+# =============================================================================
+# 3. PARTICLE ANALYZER & CLASSIFIER
+# =============================================================================
+
+class CloudChamberAnalyzer:
+    """High-precision trajectory extraction, metric calculation, and classification."""
+
+    def __init__(
+        self,
+        calibrator: Optional[SpatialCalibrator] = None,
+        curvilinear_scales: Sequence[float] = (1.2, 2.0, 3.2, 5.0),
+        min_track_length_px: float = 24.0,
+        alpha_width_threshold_mm: float = 1.40,
+        electron_curvature_threshold: float = 0.18
+    ):
+        self.calibrator = calibrator if calibrator is not None else SpatialCalibrator(pixels_per_cm=40.0)
+        self.curvilinear_scales = curvilinear_scales
+        self.min_track_length_px = min_track_length_px
+        self.alpha_width_threshold_mm = alpha_width_threshold_mm
+        self.electron_curvature_threshold = electron_curvature_threshold
+
+    def preprocess(self, bgr_image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Pre-processing pipeline:
+        1. Grayscale conversion.
+        2. Status-bar / OSD text suppression (for tall screenshots with camera UI at top).
+        3. Edge-preserving Bilateral Filter to suppress vapour noise while preserving thin tracks.
+        4. Morphological White Top-Hat to level non-uniform cloud chamber illumination.
+        5. CLAHE (Contrast Limited Adaptive Histogram Equalisation).
+        """
+        if len(bgr_image.shape) == 3:
+            gray = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = bgr_image.copy()
+
+        h, w = gray.shape[:2]
+
+        # Suppress camera status bar / timestamp text in top margin if present (e.g. 1920x1080 frames)
+        if h >= 1850 and np.mean(gray[:130, :]) > 10.0:
+            gray[:135, :] = 0
+
+        # Step 1: Edge-preserving Bilateral Filter
+        denoised = cv2.bilateralFilter(gray, d=7, sigmaColor=35, sigmaSpace=7)
+
+        # Step 2: White Top-Hat illumination levelling
+        kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+        top_hat = cv2.morphologyEx(denoised, cv2.MORPH_TOPHAT, kernel_bg)
+
+        # Blend to preserve both faint electron tracks and strong alpha trails
+        blended = cv2.addWeighted(denoised, 0.40, top_hat, 0.60, 0)
+
+        # Step 3: Contrast Limited Adaptive Histogram Equalization (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blended)
+
+        return gray, enhanced
+
+    def segment_tracks(
+        self,
+        curvilinear_map: np.ndarray,
+        threshold_factor: float = 0.72
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Adaptive segmentation and morphological centerline skeleton extraction.
+        """
+        u8_map = np.clip(curvilinear_map * 255.0, 0, 255).astype(np.uint8)
+        otsu_val, _ = cv2.threshold(u8_map, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        thresh_val = max(45, int(otsu_val * threshold_factor))
+        _, binary_mask = cv2.threshold(u8_map, thresh_val, 255, cv2.THRESH_BINARY)
+
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel_close)
+
+        skeleton = self._morphological_skeleton(binary_mask)
+        return binary_mask, skeleton
+
+    def _morphological_skeleton(self, binary_mask: np.ndarray) -> np.ndarray:
+        """Morphological erosion and opening skeleton thinning."""
+        img = binary_mask.copy()
+        skel = np.zeros(img.shape, np.uint8)
+        element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+
+        while True:
+            eroded = cv2.erode(img, element)
+            opened = cv2.morphologyEx(eroded, cv2.MORPH_OPEN, element)
+            temp = cv2.subtract(eroded, opened)
+            skel = cv2.bitwise_or(skel, temp)
+            img = eroded.copy()
+            if cv2.countNonZero(img) == 0:
+                break
+        return skel
+
+    def analyze_trajectories(
+        self,
+        binary_mask: np.ndarray,
+        skeleton: np.ndarray,
+        enhanced_gray: np.ndarray
+    ) -> List[Dict[str, Any]]:
+        """
+        Decompose tracks, extract physical parameters (length, width, curvature, tortuosity),
+        and perform physical classification into Alpha and Electron trajectories.
+        """
+        dist_transform = cv2.distanceTransform(binary_mask, cv2.DIST_L2, 5)
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            binary_mask, connectivity=8
+        )
+
+        tracks = []
+        track_id = 1
+
+        for label in range(1, num_labels):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area < 30:
+                continue
+
+            track_mask = (labels == label).astype(np.uint8)
+            track_skel = cv2.bitwise_and(skeleton, skeleton, mask=track_mask)
+
+            skel_pixels = np.column_stack(np.where(track_skel > 0))
+            if len(skel_pixels) < 8:
+                contours, _ = cv2.findContours(track_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                if not contours:
+                    continue
+                c = max(contours, key=cv2.contourArea)
+                arc_len = cv2.arcLength(c, False) / 2.0
+            else:
+                arc_len = float(len(skel_pixels))
+
+            # Discard tiny artifacts shorter than minimum length
+            if arc_len < self.min_track_length_px:
+                continue
+
+            # Track width estimation from Euclidean distance transform
+            if len(skel_pixels) > 0:
+                dt_values = dist_transform[skel_pixels[:, 0], skel_pixels[:, 1]]
+                mean_width_px = float(np.mean(dt_values) * 2.0)
+                max_width_px = float(np.max(dt_values) * 2.0)
+            else:
+                mean_width_px = float(area / max(1.0, arc_len))
+                max_width_px = mean_width_px
+
+            length_cm = self.calibrator.px_to_cm(arc_len)
+            width_mm = self.calibrator.px_to_mm(mean_width_px)
+
+            x = int(stats[label, cv2.CC_STAT_LEFT])
+            y = int(stats[label, cv2.CC_STAT_TOP])
+            w = int(stats[label, cv2.CC_STAT_WIDTH])
+            h = int(stats[label, cv2.CC_STAT_HEIGHT])
+
+            curvature, tortuosity = self._calculate_trajectory_curvature(skel_pixels, arc_len, w, h)
+            track_intensity = float(np.mean(enhanced_gray[track_mask > 0]))
+
+            classification, confidence = self._classify_track(
+                length_cm=length_cm,
+                width_mm=width_mm,
+                curvature=curvature,
+                tortuosity=tortuosity
+            )
+
+            tracks.append({
+                "track_id": track_id,
+                "classification": classification,
+                "confidence": round(confidence, 3),
+                "bbox": (x, y, w, h),
+                "length_px": round(arc_len, 2),
+                "length_cm": round(length_cm, 3),
+                "width_px": round(mean_width_px, 2),
+                "width_mm": round(width_mm, 3),
+                "max_width_mm": round(self.calibrator.px_to_mm(max_width_px), 3),
+                "curvature": round(curvature, 4),
+                "tortuosity": round(tortuosity, 4),
+                "mean_intensity": round(track_intensity, 1),
+                "mask": track_mask
+            })
+            track_id += 1
+
+        tracks.sort(key=lambda t: t["length_px"], reverse=True)
+        return tracks
+
+    def _calculate_trajectory_curvature(
+        self,
+        skel_points: np.ndarray,
+        arc_length: float,
+        bbox_w: int,
+        bbox_h: int
+    ) -> Tuple[float, float]:
+        """Compute chord-to-arc tortuosity and curvature index."""
+        if len(skel_points) < 5:
+            diag = math.hypot(bbox_w, bbox_h)
+            tortuosity = max(0.0, 1.0 - (diag / max(1.0, arc_length)))
+            return float(tortuosity * 0.5), float(tortuosity)
+
+        pts = skel_points[:, [1, 0]]
+        if len(pts) > 50:
+            sub_pts = pts[np.linspace(0, len(pts) - 1, 50, dtype=int)]
+        else:
+            sub_pts = pts
+
+        diff = sub_pts[:, np.newaxis, :] - sub_pts[np.newaxis, :, :]
+        dist_matrix = np.sqrt(np.sum(diff ** 2, axis=-1))
+        max_chord = float(np.max(dist_matrix))
+
+        tortuosity = max(0.0, min(1.0, 1.0 - (max_chord / max(1.0, arc_length))))
+        curvature = tortuosity * 0.80 + (1.0 - min(bbox_w, bbox_h) / max(1.0, max(bbox_w, bbox_h))) * 0.20
+        return float(curvature), float(tortuosity)
+
+    def _classify_track(
+        self,
+        length_cm: float,
+        width_mm: float,
+        curvature: float,
+        tortuosity: float
+    ) -> Tuple[str, float]:
+        """
+        High-accuracy physical classification adhering to Topic 4 specifications:
+        
+        Alpha Particle Tracks:
+        - Dense ionization column resulting in thick tracks (width >= 1.4 mm).
+        - Consistent, short-to-moderate length (<= 6.5 cm, originating from Radon decay).
+        - High momentum results in straight or gently deflected propagation.
+        - Circumscribed by Yellow Bounding Box.
+
+        Electron Particle Tracks:
+        - Weak ionization creates thin tracks (width < 1.4 mm).
+        - Easily deflected in magnetic fields, forming curved or circular trajectories.
+        - Circumscribed by Red Bounding Box.
+        """
+        is_thick = width_mm >= self.alpha_width_threshold_mm
+        is_short_enough = length_cm <= 6.5
+        is_straight = curvature < self.electron_curvature_threshold and tortuosity < 0.25
+
+        alpha_score = 0.0
+        if is_thick:
+            alpha_score += 0.55
+        if is_short_enough:
+            alpha_score += 0.25
+        if is_straight:
+            alpha_score += 0.20
+
+        is_thin = width_mm < self.alpha_width_threshold_mm
+        is_bent = curvature >= self.electron_curvature_threshold or tortuosity >= 0.25
+
+        electron_score = 0.0
+        if is_thin:
+            electron_score += 0.50
+        if is_bent:
+            electron_score += 0.50
+
+        if alpha_score > electron_score:
+            confidence = min(0.99, 0.50 + alpha_score * 0.45)
+            return "Alpha", confidence
+        else:
+            confidence = min(0.99, 0.50 + electron_score * 0.45)
+            return "Electron", confidence
+
+    def annotate_detections(
+        self,
+        original_bgr: np.ndarray,
+        tracks: List[Dict[str, Any]]
+    ) -> np.ndarray:
+        """Draw Yellow Bounding Boxes for Alpha and Red Bounding Boxes for Electron."""
+        annotated = original_bgr.copy()
+        COLOR_ALPHA_YELLOW = (0, 255, 255)  # BGR
+        COLOR_ELECTRON_RED = (0, 0, 255)    # BGR
+
+        for track in tracks:
+            x, y, w, h = track["bbox"]
+            p_type = track["classification"]
+            conf = track["confidence"]
+            length_cm = track["length_cm"]
+            width_mm = track["width_mm"]
+
+            box_color = COLOR_ALPHA_YELLOW if p_type == "Alpha" else COLOR_ELECTRON_RED
+
+            cv2.rectangle(annotated, (x, y), (x + w, y + h), box_color, 2)
+
+            mask = track["mask"]
+            color_layer = np.zeros_like(annotated)
+            color_layer[mask > 0] = box_color
+            cv2.addWeighted(color_layer, 0.35, annotated, 1.0, 0, annotated)
+
+            label_text = f"#{track['track_id']} {p_type} ({conf*100:.0f}%)"
+            sub_text = f"L:{length_cm:.2f}cm W:{width_mm:.2f}mm"
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (text_w, text_h), _ = cv2.getTextSize(label_text, font, 0.45, 1)
+
+            badge_y1 = max(0, y - text_h - 16)
+            badge_y2 = max(text_h + 16, y)
+            badge_x1 = x
+            badge_x2 = x + max(text_w, 140) + 8
+
+            cv2.rectangle(annotated, (badge_x1, badge_y1), (badge_x2, badge_y2), (20, 20, 20), -1)
+            cv2.rectangle(annotated, (badge_x1, badge_y1), (badge_x2, badge_y2), box_color, 1)
+
+            cv2.putText(annotated, label_text, (badge_x1 + 4, badge_y1 + text_h + 3),
+                        font, 0.45, box_color, 1, cv2.LINE_AA)
+            cv2.putText(annotated, sub_text, (badge_x1 + 4, badge_y2 - 3),
+                        font, 0.38, (220, 220, 220), 1, cv2.LINE_AA)
+
+        # Header legend
+        h_img, w_img = annotated.shape[:2]
+        banner = annotated[:36, :].copy()
+        cv2.rectangle(banner, (0, 0), (w_img, 36), (15, 15, 15), -1)
+        cv2.addWeighted(banner, 0.85, annotated[:36, :], 0.15, 0, annotated[:36, :])
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.rectangle(annotated, (15, 10), (30, 25), COLOR_ALPHA_YELLOW, -1)
+        cv2.putText(annotated, "Alpha Track (Yellow Box, Thick/Straight)", (36, 22), font, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        cv2.rectangle(annotated, (330, 10), (345, 25), COLOR_ELECTRON_RED, -1)
+        cv2.putText(annotated, "Electron Track (Red Box, Thin/Curved)", (352, 22), font, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        n_alpha = sum(1 for t in tracks if t["classification"] == "Alpha")
+        n_elec = sum(1 for t in tracks if t["classification"] == "Electron")
+        cv2.putText(annotated, f"Total: {len(tracks)} (Alpha: {n_alpha}, Electron: {n_elec})",
+                    (w_img - 260, 22), font, 0.45, (100, 255, 100), 1, cv2.LINE_AA)
+        return annotated
+
+    def generate_pipeline_figure(
+        self,
+        original_bgr: np.ndarray,
+        enhanced_gray: np.ndarray,
+        curvilinear_map: np.ndarray,
+        annotated_bgr: np.ndarray
+    ) -> np.ndarray:
+        """Create 4-panel diagnostic figure."""
+        h, w = original_bgr.shape[:2]
+        enhanced_bgr = cv2.cvtColor(enhanced_gray, cv2.COLOR_GRAY2BGR)
+
+        u8_curv = np.clip(curvilinear_map * 255.0, 0, 255).astype(np.uint8)
+        curv_colormap = cv2.applyColorMap(u8_curv, cv2.COLORMAP_INFERNO)
+
+        def add_title(img, title):
+            p = img.copy()
+            cv2.rectangle(p, (0, 0), (w, 30), (0, 0, 0), -1)
+            cv2.putText(p, title, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            return p
+
+        p1 = add_title(original_bgr, "1. Input Cloud Chamber Image")
+        p2 = add_title(enhanced_bgr, "2. Preprocessed (Bilateral + TopHat + CLAHE)")
+        p3 = add_title(curv_colormap, "3. Curvilinear Filter Response (Frangi/Hessian)")
+        p4 = add_title(annotated_bgr, "4. Track Classification (Yellow: Alpha, Red: Electron)")
+
+        top = np.hstack([p1, p2])
+        bottom = np.hstack([p3, p4])
+        return np.vstack([top, bottom])
+
+
+# =============================================================================
+# 4. DIRECTORY DISCOVERY & DASHBOARD EXPORT
+# =============================================================================
+
+def locate_directories() -> Tuple[Path, Path]:
+    """Find input 'image/' and output 'result/' directories."""
+    current_dir = Path(__file__).resolve().parent
+    candidate_roots = [current_dir.parent, current_dir, Path.cwd()]
+
+    image_dir = None
+    result_dir = None
+
+    for root in candidate_roots:
+        cand_img = root / "image"
+        cand_res = root / "result"
+        if cand_img.exists() and cand_img.is_dir():
+            image_dir = cand_img
+            result_dir = cand_res
+            break
+
+    if image_dir is None:
+        image_dir = current_dir.parent / "image"
+        result_dir = current_dir.parent / "result"
+
+    result_dir.mkdir(parents=True, exist_ok=True)
+    return image_dir, result_dir
+
+
+def generate_batch_dashboard_matplotlib(summary_data: list, output_path: Path):
+    """Render 4-panel dashboard with Matplotlib."""
+    if not summary_data or not HAS_MATPLOTLIB:
+        return
+
+    plt.figure(figsize=(14, 10))
+    plt.style.use("ggplot")
+
+    alphas = [d for d in summary_data if d["classification"] == "Alpha"]
+    electrons = [d for d in summary_data if d["classification"] == "Electron"]
+
+    plt.subplot(2, 2, 1)
+    labels = ["Alpha Particle", "Electron Particle"]
+    counts = [len(alphas), len(electrons)]
+    bars = plt.bar(labels, counts, color=["#F4D03F", "#E74C3C"], edgecolor="black", width=0.5)
+    plt.title("Particle Trajectory Distribution", fontsize=12, fontweight="bold")
+    plt.ylabel("Detected Tracks", fontsize=10)
+    for bar in bars:
+        h = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2.0, h + 0.5, f"{int(h)}", ha="center", va="bottom", fontweight="bold")
+
+    plt.subplot(2, 2, 2)
+    if alphas:
+        plt.scatter([d["length_cm"] for d in alphas], [d["width_mm"] for d in alphas],
+                    c="#F4D03F", edgecolor="black", s=65, label="Alpha (Yellow Box)", alpha=0.85)
+    if electrons:
+        plt.scatter([d["length_cm"] for d in electrons], [d["width_mm"] for d in electrons],
+                    c="#E74C3C", edgecolor="black", s=65, label="Electron (Red Box)", alpha=0.85)
+    plt.axhline(y=1.40, color="gray", linestyle="--", linewidth=1.2, label="Width Threshold (1.40 mm)")
+    plt.title("Track Geometry: Length vs Width", fontsize=12, fontweight="bold")
+    plt.xlabel("Track Length (cm)", fontsize=10)
+    plt.ylabel("Track Width / Thickness (mm)", fontsize=10)
+    plt.legend(loc="upper right", frameon=True)
+
+    plt.subplot(2, 2, 3)
+    plt.hist([d["curvature"] for d in summary_data], bins=15, color="#3498DB", edgecolor="black", alpha=0.8)
+    plt.title("Curvature / Tortuosity Distribution", fontsize=12, fontweight="bold")
+    plt.xlabel("Curvature Index (0 = Linear, >0.18 = Deflected)", fontsize=10)
+    plt.ylabel("Trajectory Frequency", fontsize=10)
+
+    plt.subplot(2, 2, 4)
+    image_names = sorted(list(set(d["image_name"] for d in summary_data)))
+    alpha_per_img = [sum(1 for d in alphas if d["image_name"] == img) for img in image_names]
+    elec_per_img = [sum(1 for d in electrons if d["image_name"] == img) for img in image_names]
+    x_idx = np.arange(len(image_names))
+    width = 0.35
+    plt.bar(x_idx - width/2, alpha_per_img, width, label="Alpha", color="#F4D03F", edgecolor="black")
+    plt.bar(x_idx + width/2, elec_per_img, width, label="Electron", color="#E74C3C", edgecolor="black")
+    plt.xticks(x_idx, [Path(i).stem for i in image_names], rotation=45, ha="right", fontsize=9)
+    plt.title("Detections per Cloud Chamber Image", fontsize=12, fontweight="bold")
+    plt.ylabel("Count", fontsize=10)
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(str(output_path), dpi=200)
+    plt.close()
+
+
+def generate_batch_dashboard_opencv(summary_data: list, output_path: Path):
+    """Fallback visual dashboard using OpenCV."""
+    canvas = np.full((700, 1000, 3), 245, dtype=np.uint8)
+    cv2.rectangle(canvas, (0, 0), (1000, 60), (30, 30, 30), -1)
+    cv2.putText(canvas, "CLOUD CHAMBER PARTICLE TRACK ANALYSIS DASHBOARD", (20, 38),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+
+    alphas = [d for d in summary_data if d["classification"] == "Alpha"]
+    electrons = [d for d in summary_data if d["classification"] == "Electron"]
+
+    def card(x, y, w, h, title, val, sub, col):
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), (255, 255, 255), -1)
+        cv2.rectangle(canvas, (x, y), (x + w, y + h), (200, 200, 200), 1)
+        cv2.rectangle(canvas, (x, y), (x + 8, y + h), col, -1)
+        cv2.putText(canvas, title, (x + 18, y + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 100), 1)
+        cv2.putText(canvas, str(val), (x + 18, y + 65), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (20, 20, 20), 2)
+        cv2.putText(canvas, sub, (x + 18, y + 90), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1)
+
+    card(40, 80, 280, 110, "TOTAL TRAJECTORIES", len(summary_data), "Segmented Tracks", (50, 150, 240))
+    card(360, 80, 280, 110, "ALPHA PARTICLES", len(alphas), "Yellow Box | Thick & Straight", (0, 215, 255))
+    card(680, 80, 280, 110, "ELECTRON PARTICLES", len(electrons), "Red Box | Thin & Curved", (50, 50, 220))
+
+    cv2.rectangle(canvas, (40, 210), (960, 660), (255, 255, 255), -1)
+    cv2.rectangle(canvas, (40, 210), (960, 660), (200, 200, 200), 1)
+    cv2.putText(canvas, "Sample Trajectories Extracted via Curvilinear Filter", (60, 240),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (30, 30, 30), 2)
+
+    headers = ["ID", "Source Image", "Type", "Length (cm)", "Width (mm)", "Curvature", "Confidence"]
+    col_x = [60, 110, 300, 440, 580, 720, 850]
+    for i, h in enumerate(headers):
+        cv2.putText(canvas, h, (col_x[i], 275), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (80, 80, 80), 1)
+    cv2.line(canvas, (50, 285), (950, 285), (210, 210, 210), 1)
+
+    row_y = 315
+    for item in summary_data[:12]:
+        p_col = (0, 180, 220) if item["classification"] == "Alpha" else (40, 40, 200)
+        cv2.putText(canvas, f"#{item['track_id']}", (col_x[0], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        cv2.putText(canvas, str(item['image_name']), (col_x[1], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        cv2.putText(canvas, str(item['classification']), (col_x[2], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, p_col, 1)
+        cv2.putText(canvas, f"{item['length_cm']:.2f}", (col_x[3], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        cv2.putText(canvas, f"{item['width_mm']:.2f}", (col_x[4], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        cv2.putText(canvas, f"{item['curvature']:.3f}", (col_x[5], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        cv2.putText(canvas, f"{item['confidence']*100:.0f}%", (col_x[6], row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (60, 60, 60), 1)
+        row_y += 28
+
+    cv2.imwrite(str(output_path), canvas)
+
+
+def write_summary_report(summary_data: list, output_path: Path):
+    """Write UK English markdown report complying with BMDS2133 rubric."""
+    alphas = [d for d in summary_data if d["classification"] == "Alpha"]
+    electrons = [d for d in summary_data if d["classification"] == "Electron"]
+    total = len(summary_data)
+
+    mean_alpha_len = np.mean([d["length_cm"] for d in alphas]) if alphas else 0.0
+    mean_alpha_wid = np.mean([d["width_mm"] for d in alphas]) if alphas else 0.0
+    mean_elec_len = np.mean([d["length_cm"] for d in electrons]) if electrons else 0.0
+    mean_elec_wid = np.mean([d["width_mm"] for d in electrons]) if electrons else 0.0
+
+    content = f"""# Cloud Chamber Particle Track Analysis Report
+**Course**: BMDS2133 Image Processing  
+**Topic**: Cloud Chamber Particle Track Classification (Topic 4)  
+**Algorithm**: Multiscale Curvilinear Filter (Hessian Matrix Scale-Space / Frangi Vesselness)  
+**Language Standard**: UK English  
+
+---
+
+## 1. Objectives & Trajectory Classification Standards
+This automated image analysis pipeline inspects particle tracks produced inside a diffusion cloud chamber:
+- **Alpha Particle Tracks**: High ionisation density, thick and short tracks (<= 6.5 cm), linear propagation. Circumscribed by **Yellow Bounding Boxes**.
+- **Electron Particle Tracks**: Weak ionisation, thin tracks, readily deflected in magnetic fields (circular or curved). Circumscribed by **Red Bounding Boxes**.
+
+---
+
+## 2. Experimental Summary
+
+| Metric | Alpha Particles | Electron Particles | Total |
+| :--- | :--- | :--- | :--- |
+| **Detected Tracks** | {len(alphas)} | {len(electrons)} | {total} |
+| **Bounding Box Colour** | **Yellow** | **Red** | - |
+| **Mean Length** | {mean_alpha_len:.2f} cm | {mean_elec_len:.2f} cm | - |
+| **Mean Width / Thickness** | {mean_alpha_wid:.2f} mm | {mean_elec_wid:.2f} mm | - |
+
+---
+
+## 3. Generated Files in `result/`
+- `{{name}}_classified.jpg`: Full resolution image with Yellow/Red bounding boxes and metadata.
+- `{{name}}_pipeline.png`: 4-stage diagnostic figure (Input, Pre-processed, Curvilinear Response, Detection).
+- `summary_report.csv`: Complete numerical measurements of all particle coordinates and physical dimensions.
+- `batch_analysis_dashboard.png`: Multi-panel statistical analysis dashboard.
+"""
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+# =============================================================================
+# 5. MAIN EXECUTION PIPELINE
+# =============================================================================
+
+def run_pipeline():
+    """Execute complete analysis pipeline across all cloud chamber images."""
+    print("=" * 75)
+    print("   BMDS2133 IMAGE PROCESSING - CLOUD CHAMBER PARTICLE TRACK CLASSIFIER")
+    print("   Algorithm: Multiscale Curvilinear Filter (Hessian Matrix Scale-Space)")
+    print("=" * 75)
+
+    start_time = time.time()
+    image_dir, result_dir = locate_directories()
+    print(f"[+] Input Directory  : {image_dir}")
+    print(f"[+] Output Directory : {result_dir}\n")
+
+    patterns = ["*.jpg", "*.jpeg", "*.png", "*.bmp"]
+    image_files = []
+    for pat in patterns:
+        image_files.extend(image_dir.glob(pat))
+        image_files.extend(image_dir.glob(pat.upper()))
+
+    image_files = sorted(list(set(image_files)))
+    if not image_files:
+        print(f"[-] No images found in {image_dir}!")
+        return
+
+    print(f"[+] Found {len(image_files)} cloud chamber images for analysis.\n")
+
+    calibrator = SpatialCalibrator(pixels_per_cm=40.0)
+    analyzer = CloudChamberAnalyzer(
+        calibrator=calibrator,
+        curvilinear_scales=(1.2, 2.0, 3.2, 5.0),
+        min_track_length_px=24.0,
+        alpha_width_threshold_mm=1.40,
+        electron_curvature_threshold=0.18
+    )
+
+    all_records = []
+    csv_headers = [
+        "track_id", "classification", "confidence", "length_px", "length_cm",
+        "width_px", "width_mm", "curvature", "tortuosity", "mean_intensity",
+        "bbox_x", "bbox_y", "bbox_w", "bbox_h"
+    ]
+
+    for idx, img_path in enumerate(image_files, 1):
+        filename = img_path.name
+        stem = img_path.stem
+        print(f"[{idx}/{len(image_files)}] Processing {filename} ...")
+
+        bgr = cv2.imread(str(img_path))
+        if bgr is None:
+            print(f"    [-] Failed to load {filename}. Skipping.")
+            continue
+
+        # 1. Preprocessing (with status bar suppression)
+        gray, enhanced = analyzer.preprocess(bgr)
+
+        # 2. Curvilinear Filter
+        curv_map = apply_curvilinear_filter(enhanced, sigmas=analyzer.curvilinear_scales)
+
+        # 3. Segmentation & Thinning
+        binary_mask, skeleton = analyzer.segment_tracks(curv_map, threshold_factor=0.72)
+
+        # 4. Trajectory Metrics & Physical Classification
+        tracks = analyzer.analyze_trajectories(binary_mask, skeleton, enhanced)
+
+        # 5. Annotation (Yellow for Alpha, Red for Electron)
+        annotated = analyzer.annotate_detections(bgr, tracks)
+
+        # 6. Pipeline Diagnostic Figure
+        pipeline_fig = analyzer.generate_pipeline_figure(bgr, enhanced, curv_map, annotated)
+
+        # Save Visual Artifacts to result/
+        classified_path = result_dir / f"{stem}_classified.jpg"
+        pipeline_path = result_dir / f"{stem}_pipeline.png"
+        cv2.imwrite(str(classified_path), annotated)
+        cv2.imwrite(str(pipeline_path), pipeline_fig)
+
+        # Save CSV Metrics to result/
+        metrics_path = result_dir / f"{stem}_metrics.csv"
+        with open(metrics_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=csv_headers)
+            writer.writeheader()
+            for t in tracks:
+                x, y, w_box, h_box = t["bbox"]
+                rec = {
+                    "track_id": t["track_id"],
+                    "classification": t["classification"],
+                    "confidence": t["confidence"],
+                    "length_px": t["length_px"],
+                    "length_cm": t["length_cm"],
+                    "width_px": t["width_px"],
+                    "width_mm": t["width_mm"],
+                    "curvature": t["curvature"],
+                    "tortuosity": t["tortuosity"],
+                    "mean_intensity": t["mean_intensity"],
+                    "bbox_x": x,
+                    "bbox_y": y,
+                    "bbox_w": w_box,
+                    "bbox_h": h_box
+                }
+                writer.writerow(rec)
+
+                master_rec = rec.copy()
+                master_rec["image_name"] = filename
+                all_records.append(master_rec)
+
+        n_alpha = sum(1 for t in tracks if t["classification"] == "Alpha")
+        n_elec = sum(1 for t in tracks if t["classification"] == "Electron")
+        print(f"    --> Found {len(tracks)} tracks ({n_alpha} Alpha [Yellow], {n_elec} Electron [Red]).")
+
+    # Master CSV
+    master_csv = result_dir / "summary_report.csv"
+    with open(master_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["image_name"] + csv_headers)
+        writer.writeheader()
+        for r in all_records:
+            writer.writerow(r)
+    print(f"\n[+] Master CSV saved: {master_csv}")
+
+    # Dashboard & Markdown Report
+    dash_path = result_dir / "batch_analysis_dashboard.png"
+    if HAS_MATPLOTLIB:
+        generate_batch_dashboard_matplotlib(all_records, dash_path)
+    else:
+        generate_batch_dashboard_opencv(all_records, dash_path)
+    print(f"[+] Summary dashboard saved: {dash_path}")
+
+    report_path = result_dir / "analysis_summary_report.md"
+    write_summary_report(all_records, report_path)
+    print(f"[+] Markdown report saved: {report_path}")
+
+    elapsed = time.time() - start_time
+    print(f"\n[SUCCESS] Completed in {elapsed:.2f}s. All outputs placed in: {result_dir}")
+    print("=" * 75)
+
+
+if __name__ == "__main__":
+    run_pipeline()
