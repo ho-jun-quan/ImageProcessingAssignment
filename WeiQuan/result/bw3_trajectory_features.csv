@@ -1,0 +1,2 @@
+image_name,trajectory_id,segment_count,trajectory_length_px,orientation_angle_deg,straightness,curvature_rad_per_px,average_angle_change_deg,trajectory_evidence
+bw3.jpg,1,1,49.0,0.0,1.0,0.0,0.0,Uncertain

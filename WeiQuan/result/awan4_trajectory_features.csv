@@ -1,0 +1,5 @@
+image_name,trajectory_id,segment_count,trajectory_length_px,orientation_angle_deg,straightness,curvature_rad_per_px,average_angle_change_deg,trajectory_evidence
+awan4.jpg,1,1,53.41348144429457,141.84277341263095,1.0,0.0,0.0,Uncertain
+awan4.jpg,2,1,36.05551275463989,70.5599651718238,1.0,0.0,0.0,Uncertain
+awan4.jpg,3,1,33.421549934136806,141.0724564072077,1.0,0.0,0.0,Uncertain
+awan4.jpg,4,1,24.515301344262525,101.76828893202064,1.0,0.0,0.0,Uncertain

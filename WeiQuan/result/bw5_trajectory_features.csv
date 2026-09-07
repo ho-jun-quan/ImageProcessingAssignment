@@ -1,0 +1,4 @@
+image_name,trajectory_id,segment_count,trajectory_length_px,orientation_angle_deg,straightness,curvature_rad_per_px,average_angle_change_deg,trajectory_evidence
+bw5.jpg,1,1,46.010868281309364,1.2453642667683475,1.0,0.0,0.0,Uncertain
+bw5.jpg,2,2,76.6226108572867,113.20449782674707,0.8592770692773071,0.005769760654246813,12.665063765042362,Uncertain
+bw5.jpg,3,1,29.832867780352597,76.42956561483852,1.0,0.0,0.0,Uncertain

@@ -1,0 +1,1 @@
+segment,trajectory_id,x1,y1,x2,y2,midpoint_x,midpoint_y,length_px,orientation_deg,trajectory_length_px,trajectory_orientation_deg,trajectory_straightness,trajectory_curvature_rad_per_px,trajectory_average_angle_change_deg,trajectory_evidence
