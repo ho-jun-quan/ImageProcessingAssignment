@@ -1,11 +1,15 @@
 import cv2
 import numpy as np
 import os
+import sys
 import uuid
 import json
 import time
 import threading
 from flask import Flask, request, jsonify, send_from_directory, Response, render_template
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'WeiQuan', 'code'))
+from hough_pipeline import analyze_frame
 
 app = Flask(__name__)
 
@@ -21,86 +25,14 @@ tasks = {}
 
 
 # =============================================================================
-# CORE PIPELINE (unchanged — Otsu + bounding box geometry)
+# CORE PIPELINE (Canny + Probabilistic Hough Transform)
 # =============================================================================
 
 def process_frame(img):
-    """Core pipeline: takes a raw frame, returns (annotated_output, binary_mask, detections)."""
+    """Run the shared HoughLinesP trajectory pipeline on an in-memory frame."""
 
-    # Crop out the physical borders of the chamber (Top:Bottom, Left:Right)
-    img = img[100:1820, 100:980]
-    output_img = img.copy()
-
-    # Preprocessing & Noise Reduction
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
-    blurred = cv2.medianBlur(enhanced, 5)
-
-    # Segmentation (Otsu's Thresholding)
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # Morphological operations
-    kernel = np.ones((5, 5), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-    open_kernel = np.ones((3, 3), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, open_kernel, iterations=2)
-
-    # Black out reflections and ceiling
-    cv2.rectangle(binary, (160, 0), (250, 1920), 0, -1)
-    cv2.rectangle(binary, (660, 0), (750, 1920), 0, -1)
-    cv2.rectangle(binary, (0, 0), (2000, 75), 0, -1)
-
-    # Object Detection (Contours)
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Feature Extraction, Filtering & Classification
-    detections = []
-    for contour in contours:
-        rect = cv2.minAreaRect(contour)
-        (cx, cy), (w, h), angle = rect
-        min_dim = min(w, h)
-        max_dim = max(w, h)
-        box_area = min_dim * max_dim
-        actual_area = cv2.contourArea(contour)
-
-        if box_area == 0:
-            continue
-
-        aspect_ratio = max_dim / max(min_dim, 1)
-        density = actual_area / box_area
-
-        # Noise filters
-        if max_dim < 25:
-            continue
-        if max_dim < 70 and aspect_ratio < 4:
-            continue
-
-        # Classification
-        if (density > 0.40 and min_dim > 15 and aspect_ratio < 8) or (min_dim > 60 and aspect_ratio < 8):
-            particle_type = "Alpha"
-            box_color = (0, 0, 255)
-        else:
-            particle_type = "Electron"
-            box_color = (0, 255, 255)
-
-        # Draw on output
-        box = cv2.boxPoints(rect)
-        box = np.intp(box)
-        cv2.drawContours(output_img, [box], 0, box_color, 2)
-        label = f"{particle_type} (D:{density:.2f} T:{min_dim:.0f})"
-        cv2.putText(output_img, label, (int(cx), int(cy) - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
-
-        detections.append({
-            'type': particle_type,
-            'length': round(max_dim, 1),
-            'thickness': round(min_dim, 1),
-            'density': round(density, 2),
-            'ar': round(aspect_ratio, 1)
-        })
-
-    return output_img, binary, detections
+    annotated, edges, summaries, detections = analyze_frame(img)
+    return annotated, edges, detections
 
 
 # =============================================================================
@@ -151,9 +83,9 @@ def process_video_task(task_id, filepath):
 
     # Write first frame
     writer.write(first_output)
-    summary = {'Alpha': 0, 'Electron': 0}
+    summary = {'Straight trajectory': 0, 'Curved trajectory': 0, 'Uncertain': 0}
     for d in first_dets:
-        summary[d['type']] += 1
+        summary[d['evidence']] += 1
 
     frame_num = 1
     while True:
@@ -166,7 +98,7 @@ def process_video_task(task_id, filepath):
         writer.write(output_img)
 
         for d in detections:
-            summary[d['type']] += 1
+            summary[d['evidence']] += 1
 
         # Update progress (throttled — only update every 10 frames)
         if frame_num % 10 == 0 or frame_num == total:
@@ -212,14 +144,17 @@ def upload():
         result_name = f"{task_id}_result.jpg"
         cv2.imwrite(os.path.join(RESULTS_FOLDER, result_name), output_img)
 
-        alpha_count = sum(1 for d in detections if d['type'] == 'Alpha')
-        electron_count = sum(1 for d in detections if d['type'] == 'Electron')
+        evidence_summary = {
+            'Straight trajectory': sum(1 for d in detections if d['evidence'] == 'Straight trajectory'),
+            'Curved trajectory': sum(1 for d in detections if d['evidence'] == 'Curved trajectory'),
+            'Uncertain': sum(1 for d in detections if d['evidence'] == 'Uncertain'),
+        }
 
         return jsonify({
             'type': 'image',
             'result_url': f'/results/{result_name}',
             'detections': detections,
-            'summary': {'Alpha': alpha_count, 'Electron': electron_count}
+            'summary': evidence_summary
         })
 
     elif ext in ('mp4', 'avi', 'mov', 'mkv'):
@@ -277,4 +212,3 @@ if __name__ == '__main__':
     print("  ================================")
     print("  Open  http://localhost:5000  in your browser\n")
     app.run(debug=False, threaded=True, port=5000)
-

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cloud Chamber Particle Detector</title>
+    <title>Cloud Chamber HoughLinesP Trajectory Evidence</title>
     <style>
         :root {
             --bg:          #0d1117;
@@ -12,8 +12,9 @@
             --border:      #30363d;
             --text:        #e6edf3;
             --text-dim:    #8b949e;
-            --alpha-color: #f85149;
-            --electron-color: #f0c000;
+            --straight-color: #3fb950;
+            --curved-color: #f0c000;
+            --uncertain-color: #8b949e;
             --accent:      #58a6ff;
             --radius:      12px;
         }
@@ -91,7 +92,7 @@
         /* Stats Cards */
         .stats {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 16px;
         }
 
@@ -112,8 +113,9 @@
             flex-shrink: 0;
         }
 
-        .stat-card .dot.alpha { background: var(--alpha-color); box-shadow: 0 0 10px var(--alpha-color); }
-        .stat-card .dot.electron { background: var(--electron-color); box-shadow: 0 0 10px var(--electron-color); }
+        .stat-card .dot.straight { background: var(--straight-color); box-shadow: 0 0 10px var(--straight-color); }
+        .stat-card .dot.curved { background: var(--curved-color); box-shadow: 0 0 10px var(--curved-color); }
+        .stat-card .dot.uncertain { background: var(--uncertain-color); box-shadow: 0 0 10px var(--uncertain-color); }
 
         .stat-card .stat-label {
             color: var(--text-dim);
@@ -249,16 +251,17 @@
             font-weight: 600;
         }
 
-        .badge.alpha   { background: rgba(248,81,73,0.15); color: var(--alpha-color); }
-        .badge.electron { background: rgba(240,192,0,0.15); color: var(--electron-color); }
+        .badge.straight { background: rgba(63,185,80,0.15); color: var(--straight-color); }
+        .badge.curved { background: rgba(240,192,0,0.15); color: var(--curved-color); }
+        .badge.uncertain { background: rgba(139,148,158,0.15); color: var(--uncertain-color); }
 
         .det-table-scroll { max-height: 320px; overflow-y: auto; }
 
         /* Error toast */
         .error-msg {
             background: rgba(248,81,73,0.12);
-            border: 1px solid var(--alpha-color);
-            color: var(--alpha-color);
+            border: 1px solid var(--curved-color);
+            color: var(--curved-color);
             padding: 12px 20px;
             border-radius: var(--radius);
             display: none;
@@ -272,7 +275,7 @@
     <header>
         <div class="logo">&#9883;</div>
         <h1>Cloud Chamber Particle Detector</h1>
-        <div class="subtitle">Otsu Segmentation &bull; Bounding Box Geometry</div>
+        <div class="subtitle">Canny &bull; HoughLinesP &bull; Trajectory Geometry</div>
     </header>
 
     <div class="container">
@@ -307,17 +310,24 @@
         <!-- Stats Cards -->
         <div class="stats" id="statsArea" style="display:none;">
             <div class="stat-card">
-                <div class="dot alpha"></div>
+                <div class="dot straight"></div>
                 <div>
-                    <div class="stat-label">Alpha Particles</div>
-                    <div class="stat-value" id="alphaCount">0</div>
+                    <div class="stat-label">Straight trajectories</div>
+                    <div class="stat-value" id="straightCount">0</div>
                 </div>
             </div>
             <div class="stat-card">
-                <div class="dot electron"></div>
+                <div class="dot curved"></div>
                 <div>
-                    <div class="stat-label">Electron Particles</div>
-                    <div class="stat-value" id="electronCount">0</div>
+                    <div class="stat-label">Curved trajectories</div>
+                    <div class="stat-value" id="curvedCount">0</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="dot uncertain"></div>
+                <div>
+                    <div class="stat-label">Uncertain</div>
+                    <div class="stat-value" id="uncertainCount">0</div>
                 </div>
             </div>
         </div>
@@ -332,11 +342,11 @@
                 <table class="det-table">
                     <thead>
                         <tr>
-                            <th>Type</th>
-                            <th>Length</th>
-                            <th>Thickness</th>
-                            <th>Density</th>
-                            <th>Aspect Ratio</th>
+                            <th>Evidence</th>
+                            <th>Length (px)</th>
+                            <th>Angle (deg)</th>
+                            <th>Straightness</th>
+                            <th>Curvature</th>
                         </tr>
                     </thead>
                     <tbody id="detectionsBody"></tbody>
@@ -354,8 +364,9 @@
         const progressText = document.getElementById('progressText');
         const progressPct  = document.getElementById('progressPct');
         const statsArea    = document.getElementById('statsArea');
-        const alphaCount   = document.getElementById('alphaCount');
-        const electronCount = document.getElementById('electronCount');
+        const straightCount = document.getElementById('straightCount');
+        const curvedCount = document.getElementById('curvedCount');
+        const uncertainCount = document.getElementById('uncertainCount');
         const resultArea   = document.getElementById('resultArea');
         const detectionsPanel = document.getElementById('detectionsPanel');
         const detectionsBody  = document.getElementById('detectionsBody');
@@ -457,8 +468,9 @@
         // --- Show image result ---
         function showImageResult(data) {
             // Stats
-            alphaCount.textContent = data.summary.Alpha;
-            electronCount.textContent = data.summary.Electron;
+            straightCount.textContent = data.summary['Straight trajectory'];
+            curvedCount.textContent = data.summary['Curved trajectory'];
+            uncertainCount.textContent = data.summary.Uncertain;
             statsArea.style.display = 'grid';
 
             // Image
@@ -477,8 +489,9 @@
         // --- Show video result ---
         function showVideoResult(data) {
             // Stats
-            alphaCount.textContent = data.summary.Alpha;
-            electronCount.textContent = data.summary.Electron;
+            straightCount.textContent = data.summary['Straight trajectory'];
+            curvedCount.textContent = data.summary['Curved trajectory'];
+            uncertainCount.textContent = data.summary.Uncertain;
             statsArea.style.display = 'grid';
 
             // Video player
@@ -498,13 +511,13 @@
             detectionsBody.innerHTML = '';
             for (const d of detections) {
                 const tr = document.createElement('tr');
-                const cls = d.type === 'Alpha' ? 'alpha' : 'electron';
+                const cls = d.evidence === 'Straight trajectory' ? 'straight' : (d.evidence === 'Curved trajectory' ? 'curved' : 'uncertain');
                 tr.innerHTML = `
-                    <td><span class="badge ${cls}">${d.type}</span></td>
+                    <td><span class="badge ${cls}">${d.evidence}</span></td>
                     <td>${d.length}</td>
-                    <td>${d.thickness}</td>
-                    <td>${d.density}</td>
-                    <td>${d.ar}</td>
+                    <td>${d.orientation_angle}</td>
+                    <td>${d.straightness}</td>
+                    <td>${d.curvature}</td>
                 `;
                 detectionsBody.appendChild(tr);
             }

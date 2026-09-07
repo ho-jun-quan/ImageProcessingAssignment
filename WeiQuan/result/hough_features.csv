@@ -1,0 +1,6 @@
+image_name,roi_x,roi_y,roi_width,roi_height,raw_hough_segments,filtered_segments,trajectory_count,primary_trajectory_id,trajectory_length_px,orientation_angle_deg,straightness,curvature_rad_per_px,average_angle_change_deg,trajectory_evidence
+awan1.jpg,54,87,972,1578,23,11,6,2,121.9177,133.667,0.9565,0.00264354,6.1696,Straight trajectory
+awan13.jpg,54,89,972,1602,149,72,34,7,351.3509,107.9013,0.4393,0.00815734,17.729,Curved trajectory
+awan21.jpg,54,89,972,1613,,,,,,,0.9307,0.00796643,,
+awan22.jpg,103,80,921,752,,,,,,,0.018389,0.00600659,,
+bw2.jpg,54,96,972,1728,,,,,,,0.9971,0.0033807,,
