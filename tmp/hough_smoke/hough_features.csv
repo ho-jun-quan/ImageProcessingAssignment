@@ -1,0 +1,2 @@
+image_name,roi_x,roi_y,roi_width,roi_height,segment_count,total_length_px,average_orientation,average_angle_change,curvature_rad_per_px,straightness,trajectory_pattern,rule_based_classification
+awan1.jpg,54,87,972,1578,9,61.98933,63.018355,10.747998,0.006052266,0.880578,Uncertain,Uncertain
