@@ -773,7 +773,7 @@ def main():
                 </div>
                 <div class="member-card">
                     <div class="member-name">Jun</div>
-                    <div class="member-tech">YOLO11 Nano Neural Network, Red-box annotation inpainting, Tiled SAHI-style multi-scale inference</div>
+                    <div class="member-tech">Fast Non Local Means Denoising, Difference of Gaussians, Otsu's Binarisation, YOLO</div>
                     <span class="pill">Deep Learning</span>
                 </div>
                 <div class="member-card">
